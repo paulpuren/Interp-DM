@@ -1,17 +1,12 @@
+import math
+import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import einops
 import torch.utils.checkpoint
-import numpy as np
-import math
 from abc import abstractmethod
-import torch.nn.functional as F
-
-import torch
-import torch.nn as nn
-import numpy as np
 from .common import NoScaleDropout, Base2FourierFeatures, timestep_embedding, MPFourier
-
 
 class TimestepBlock(nn.Module):
     """
@@ -66,14 +61,14 @@ class UpBlock(TimestepBlock):
 
         if self.up:
             self.upsample = ResBlock(
-                    in_channels,
-                    embed_dim,
-                    mlp_drop,
-                    out_channels = in_channels,
-                    use_checkpoint = use_checkpoint,
-                    use_scale_shift_norm = True,
-                    up = True
-                )
+                in_channels,
+                embed_dim,
+                mlp_drop,
+                out_channels = in_channels,
+                use_checkpoint = use_checkpoint,
+                use_scale_shift_norm = True,
+                up = True
+            )
 
     def forward(self, x, emb):
         for block in self.blocks:
@@ -102,19 +97,19 @@ class Upsample(nn.Module):
         self.use_conv = use_conv
         if use_conv:
             self.conv = nn.Conv2d(
-                    self.channels, 
-                    self.out_channels, 
-                    3, 
-                    padding = 1
-                )
+                self.channels, 
+                self.out_channels, 
+                3, 
+                padding = 1
+            )
 
     def forward(self, x):
         assert x.shape[1] == self.channels
         x = F.interpolate(
-                x, 
-                scale_factor = 2, 
-                mode = "nearest"
-            )
+            x, 
+            scale_factor = 2, 
+            mode = "nearest"
+        )
         
         if self.use_conv:
             x = self.conv(x)
@@ -141,18 +136,18 @@ class Downsample(nn.Module):
         stride = 2 
         if use_conv:
             self.op = nn.Conv2d(
-                    self.channels, 
-                    self.out_channels, 
-                    3, 
-                    stride = stride, 
-                    padding = 1 
-                )
+                self.channels, 
+                self.out_channels, 
+                3, 
+                stride = stride, 
+                padding = 1 
+            )
         else:
             assert self.channels == self.out_channels
             self.op = nn.AvgPool2d(
-                    kernel_size = stride, 
-                    stride = stride
-                )
+                kernel_size = stride, 
+                stride = stride
+            )
 
     def forward(self, x):
         assert x.shape[1] == self.channels
@@ -187,14 +182,14 @@ class DownBlock(TimestepBlock):
             in_channels = out_channels
         if self.down:
             self.downsample = ResBlock(
-                    in_channels,
-                    embed_dim,
-                    mlp_drop,
-                    out_channels = in_channels,
-                    use_checkpoint = use_checkpoint,
-                    use_scale_shift_norm = True,
-                    down = True,
-                )
+                in_channels,
+                embed_dim,
+                mlp_drop,
+                out_channels = in_channels,
+                use_checkpoint = use_checkpoint,
+                use_scale_shift_norm = True,
+                down = True,
+            )
 
     def forward(self, x, emb):
         for block in self.blocks:
@@ -277,17 +272,17 @@ class ResBlock(TimestepBlock):
             self.skip_connection = nn.Identity()
         elif use_conv:
             self.skip_connection = nn.Conv2d(
-                    channels, 
-                    self.out_channels, 
-                    3, 
-                    padding = 1
-                )
+                channels, 
+                self.out_channels, 
+                3, 
+                padding = 1
+            )
         else:
             self.skip_connection = nn.Conv2d(
-                    channels, 
-                    self.out_channels, 
-                    1
-                )
+                channels, 
+                self.out_channels, 
+                1
+            )
 
     def forward(self, x, emb):
         """
@@ -377,11 +372,11 @@ class Attention(nn.Module):
         B, L, C = x.shape
         qkv = self.qkv(x)
         qkv = einops.rearrange(
-                qkv, 
-                'B L (K H D) -> K B H L D', 
-                K = 3,
-                H = self.num_heads
-            ).float()
+            qkv, 
+            'B L (K H D) -> K B H L D', 
+            K = 3,
+            H = self.num_heads
+        ).float()
         q, k, v = qkv[0], qkv[1], qkv[2]  # B H L D
         x = torch.nn.functional.scaled_dot_product_attention(q, k, v)
         x = einops.rearrange(x, 'B H L D -> B L (H D)')
@@ -440,19 +435,19 @@ class Block(nn.Module):
         super().__init__()
         self.norm1 = norm_layer(dim, eps = 1e-6)
         self.attn = Attention(
-                dim, 
-                num_heads = num_heads, 
-                attn_drop = attn_drop
-            )
+            dim, 
+            num_heads = num_heads, 
+            attn_drop = attn_drop
+        )
         self.norm2 = norm_layer(dim, eps = 1e-6)
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(
-                in_features = dim, 
-                hidden_features = mlp_hidden_dim, 
-                act_layer = act_layer, 
-                drop = mlp_drop, 
-                norm_layer = norm_layer
-            )
+            in_features = dim, 
+            hidden_features = mlp_hidden_dim, 
+            act_layer = act_layer, 
+            drop = mlp_drop, 
+            norm_layer = norm_layer
+        )
         self.skip_linear = nn.Linear(2 * dim, dim) if skip else None
         self.use_checkpoint = use_checkpoint
 
@@ -486,6 +481,29 @@ class PatchEmbed(nn.Module):
         x = x.flatten(2).transpose(1, 2)  # Shape: [B, N_patches, embed_dim]
         return x
 
+class FourierEmbed(nn.Module):
+    def __init__(
+            self,
+            embed_dim, 
+            use_mp_fourier=True
+        ):
+
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.use_mp_fourier = use_mp_fourier
+        self.embed_layer = nn.Sequential(
+            nn.Linear(self.embed_dim, 2 * self.embed_dim),
+            nn.SiLU(),
+            nn.Linear(self.embed_dim * 2, self.embed_dim),
+        )
+        self.MPFourier_cond = MPFourier(self.embed_dim)
+
+    def forward(self, x):
+        if self.use_mp_fourier:
+            return self.embed_layer(self.MPFourier_cond(x))
+        else: 
+            return self.embed_layer(x)
+
 class Encoder(nn.Module):
     """
     Transformer-based U-Net model for diffusion denoising.
@@ -517,53 +535,57 @@ class Encoder(nn.Module):
         self.extras = 1
         
         if self.use_time:
-            # Time embedding module for diffusion timesteps
-            self.MPFourier = MPFourier(self.embed_dim)        
-            self.time_embed = nn.Sequential(
-                nn.Linear(self.embed_dim, self.embed_dim * 2),
-                nn.SiLU(),
-                nn.Linear(self.embed_dim * 2, self.embed_dim),
-            )
-        
-        # # continuous embedding for fluid conditions        
-        # if self.in_conds > 0:
-        #     self.MPFourier2 = MPFourier(self.embed_dim) 
-        #     self.cond_embed = nn.Sequential(
-        #         nn.Linear(1, 2*self.embed_dim),
-        #         nn.SiLU(),
-        #         nn.Linear(self.embed_dim * 2, self.embed_dim),
-        #     )
+            # Time embedding module for diffusion time-steps
+            self.embed_diff_time = FourierEmbed(self.embed_dim, use_mp_fourier=True)
+            # self.MPFourier = MPFourier(self.embed_dim)        
+            # self.time_embed = nn.Sequential(
+            #     nn.Linear(self.embed_dim, self.embed_dim * 2),
+            #     nn.SiLU(),
+            #     nn.Linear(self.embed_dim * 2, self.embed_dim),
+            # )
         
         # continuous embedding for fluid conditions          
-        # self.MPFourier_cond1 = MPFourier(self.embed_dim) 
-        self.cond_embed_re = nn.Sequential(
-            nn.Linear(self.in_conds, 2 * self.embed_dim),
-            nn.SiLU(),
-            nn.Linear(self.embed_dim * 2, self.embed_dim),
-        )
+        # self.cond_embed_re = nn.Sequential(
+        #     nn.Linear(self.in_conds, 2 * self.embed_dim),
+        #     nn.SiLU(),
+        #     nn.Linear(self.embed_dim * 2, self.embed_dim),
+        # )
+        self.embed_re = FourierEmbed(self.embed_dim, use_mp_fourier=True)
 
-        # continuous embedding for interpolate step conditions          
-        self.MPFourier_cond1 = MPFourier(self.embed_dim) 
-        self.cond_embed1 = nn.Sequential(
-            nn.Linear(self.embed_dim, 2*self.embed_dim),
-            nn.SiLU(),
-            nn.Linear(self.embed_dim * 2, self.embed_dim),
-        )
+        # continuous embedding for target interpolate step          
+        # self.MPFourier_cond1 = MPFourier(self.embed_dim) 
+        # self.cond_embed1 = nn.Sequential(
+        #     nn.Linear(self.embed_dim, 2*self.embed_dim),
+        #     nn.SiLU(),
+        #     nn.Linear(self.embed_dim * 2, self.embed_dim),
+        # )
+        self.embed_target_step = FourierEmbed(self.embed_dim, use_mp_fourier=True)
+
+        # continuous embedding for total interpolate step          
+        # self.MPFourier_cond2 = MPFourier(self.embed_dim) 
+        # self.cond_embed2 = nn.Sequential(
+        #     nn.Linear(self.embed_dim, 2*self.embed_dim),
+        #     nn.SiLU(),
+        #     nn.Linear(self.embed_dim * 2, self.embed_dim),
+        # )
+        self.embed_total_step = FourierEmbed(self.embed_dim, use_mp_fourier=True)
 
         # one-hot encoding for fluid conditions
         # self.label_emb = nn.Embedding(time_interp_index, self.embed_dim)
 
         in_ch = int(model_channels[0])
         self.input_blocks = nn.ModuleList(
-                [TimestepEmbedSequential(
-                        nn.Conv2d(
-                                self.in_chans, 
-                                in_ch, 
-                                3, 
-                                padding = 1
-                            )
-                    )]
-            )
+            [
+                TimestepEmbedSequential(
+                    nn.Conv2d(
+                        self.in_chans, 
+                        in_ch, 
+                        3, 
+                        padding = 1
+                    )
+                )
+            ]
+        )
         
         for level, ch in enumerate(model_channels):
             for _ in range(num_res_blocks[level]):
@@ -601,35 +623,35 @@ class Encoder(nn.Module):
 
             # Positional embeddings for patches and extra tokens
             self.pos_embed = nn.Parameter(
-                    torch.zeros(1, self.extras + self.num_patches, self.embed_dim)
-                )
+                torch.zeros(1, self.extras + self.num_patches, self.embed_dim)
+            )
 
             # Encoder blocks (first half of the U-Net)
             self.tr_blocks = nn.ModuleList(
-                    [
-                        Block(
-                            dim = self.embed_dim, 
-                            num_heads = num_heads, 
-                            mlp_ratio = mlp_ratio, 
-                            attn_drop = attn_drop,
-                            mlp_drop = mlp_drop, 
-                            norm_layer = norm_layer, 
-                            use_checkpoint = use_checkpoint
-                        )
-                        for _ in range(depth // 2)
-                    ]
-                )
+                [
+                    Block(
+                        dim = self.embed_dim, 
+                        num_heads = num_heads, 
+                        mlp_ratio = mlp_ratio, 
+                        attn_drop = attn_drop,
+                        mlp_drop = mlp_drop, 
+                        norm_layer = norm_layer, 
+                        use_checkpoint = use_checkpoint
+                    )
+                    for _ in range(depth // 2)
+                ]
+            )
 
             # Middle block
             self.mid_block = Block(
-                    dim = self.embed_dim, 
-                    num_heads = num_heads, 
-                    mlp_ratio = mlp_ratio, 
-                    attn_drop = attn_drop,
-                    mlp_drop = mlp_drop, 
-                    norm_layer = norm_layer, 
-                    use_checkpoint = use_checkpoint
-                )
+                dim = self.embed_dim, 
+                num_heads = num_heads, 
+                mlp_ratio = mlp_ratio, 
+                attn_drop = attn_drop,
+                mlp_drop = mlp_drop, 
+                norm_layer = norm_layer, 
+                use_checkpoint = use_checkpoint
+            )
 
         self.drop = NoScaleDropout(0.1)
         self.initialize_weights()
@@ -650,12 +672,12 @@ class Encoder(nn.Module):
         if self.use_transf:
             # Initialize parameters
             nn.init.trunc_normal_(
-                    self.pos_embed, 
-                    mean = 0.0, 
-                    std = 0.02, 
-                    a = -2.0, 
-                    b = 2.0
-                ) 
+                self.pos_embed, 
+                mean = 0.0, 
+                std = 0.02, 
+                a = -2.0, 
+                b = 2.0
+            ) 
             
     @torch.jit.ignore
     def no_weight_decay(self):
@@ -684,31 +706,27 @@ class Encoder(nn.Module):
         # conditioning reynolds number
         if fluid_condition is not None:
             # Add embedding if conditions are provided
-            cond = self.cond_embed_re(fluid_condition)
+            cond = self.embed_re(fluid_condition)
 
         # conditioning diffusion timesteps
         if self.use_time:
             # Create time token
-            time_token = self.time_embed(self.MPFourier(timesteps))
-            cond += time_token
-
-        # # conditioning total interpolation steps
-        # if total_interp_steps is not None:
-        #     cond += self.time_embed(self.MPFourier(total_interp_steps))
+            cond += self.embed_diff_time(timesteps)
         
         # conditioning target interpolation step
         if target_interp_step is not None:
-            cond += self.cond_embed1(self.MPFourier_cond1(target_interp_step))
+            cond += self.embed_target_step(target_interp_step)
 
+        # conditioning total interpolation steps
+        if total_interp_steps is not None:
+            cond += self.embed_total_step(total_interp_steps)
             
         skips = []
-
         for layer, module in enumerate(self.input_blocks):
             x = module(x, cond)
             if cond_skips is not None:
                 x = x + cond_skips[layer]
             skips.append(x)
-
 
         if self.use_transf:            
             x = self.patch_embed(x)  # Shape: [B, N_patches, embed_dim]
@@ -759,55 +777,30 @@ class Decoder(nn.Module):
         self.use_transf = use_transf
         self.skip = skip
         self.embed_dim = model_channels[-1]
-
-        self.MPFourier = MPFourier(self.embed_dim)        
-        self.time_embed = nn.Sequential(
-                nn.Linear(self.embed_dim, self.embed_dim * 2),
-                nn.SiLU(),
-                nn.Linear(self.embed_dim * 2, self.embed_dim),
-            ) 
-
         self.patch_embed = PatchEmbed()
 
-        # if self.in_conds > 0:
-        #     self.cond_embed  = nn.Sequential(
-        #         nn.Linear(self.in_conds, 2*self.embed_dim),
-        #         nn.SiLU(),
-        #         nn.Linear(self.embed_dim * 2, self.embed_dim),
-        #     )
-        
-        # continuous embedding for fluid conditions          
-        # self.MPFourier_cond1 = MPFourier(self.embed_dim) 
-        self.cond_embed_re = nn.Sequential(
-                nn.Linear(self.in_conds, 2 * self.embed_dim),
-                nn.SiLU(),
-                nn.Linear(self.embed_dim * 2, self.embed_dim),
-            )
-
-        # continuous embedding for interpolate step conditions          
-        self.MPFourier_cond1 = MPFourier(self.embed_dim) 
-        self.cond_embed1 = nn.Sequential(
-                nn.Linear(self.embed_dim, 2*self.embed_dim),
-                nn.SiLU(),
-                nn.Linear(self.embed_dim * 2, self.embed_dim),
-            )
+        # embedding module
+        self.embed_diff_time = FourierEmbed(self.embed_dim, use_mp_fourier=True)
+        self.embed_re = FourierEmbed(self.embed_dim, use_mp_fourier=True)
+        self.embed_target_step = FourierEmbed(self.embed_dim, use_mp_fourier=True)
+        self.embed_total_step = FourierEmbed(self.embed_dim, use_mp_fourier=True)
 
         # Decoder blocks (second half of the U-Net), with optional skip connections
         self.tr_blocks = nn.ModuleList(
-                [
-                    Block(
-                        dim = self.embed_dim, 
-                        num_heads = num_heads, 
-                        mlp_ratio = mlp_ratio, 
-                        attn_drop = attn_drop,
-                        mlp_drop = mlp_drop, 
-                        norm_layer = norm_layer, 
-                        skip = self.skip, 
-                        use_checkpoint = use_checkpoint
-                    )
-                    for _ in range(depth // 2)
-                ]
-            )
+            [
+                Block(
+                    dim = self.embed_dim, 
+                    num_heads = num_heads, 
+                    mlp_ratio = mlp_ratio, 
+                    attn_drop = attn_drop,
+                    mlp_drop = mlp_drop, 
+                    norm_layer = norm_layer, 
+                    skip = self.skip, 
+                    use_checkpoint = use_checkpoint
+                )
+                for _ in range(depth // 2)
+            ]
+        )
         self.norm = norm_layer(self.embed_dim)  # Final normalization layer
 
         ch = int(model_channels[0])
@@ -821,19 +814,19 @@ class Decoder(nn.Module):
         #self.output_blocks = nn.ModuleList([])
         
         self.output_blocks = nn.ModuleList(
-                    [
-                        TimestepEmbedSequential(
-                            ResBlock(
-                                2 * ch,
-                                self.embed_dim,
-                                mlp_drop,
-                                out_channels = ch,
-                                use_checkpoint = use_checkpoint,
-                                up = True,
-                            )
-                        )
-                    ]
+            [
+                TimestepEmbedSequential(
+                    ResBlock(
+                        2 * ch,
+                        self.embed_dim,
+                        mlp_drop,
+                        out_channels = ch,
+                        use_checkpoint = use_checkpoint,
+                        up = True,
+                    )
                 )
+            ]
+        )
         
         chans = input_block_chans.copy()
         for level, out_ch in list(enumerate(model_channels))[::-1]:
@@ -862,8 +855,6 @@ class Decoder(nn.Module):
                     )
                 self.output_blocks.append(TimestepEmbedSequential(*layers))
 
-
-        
         self.final_layer = nn.Sequential(
             nn.GroupNorm(32,ch),
             nn.SiLU(),
@@ -914,23 +905,26 @@ class Decoder(nn.Module):
         """
 
         # conditioning diffusion timesteps
-        time_token = self.time_embed(self.MPFourier(timesteps))
+        cond = self.time_embed(self.MPFourier(timesteps))
+
+        # conditioning diffusion timesteps
+        cond = self.embed_diff_time(timesteps)
 
         # conditioning reynolds number
         if fluid_condition is not None:
-            fluid_emb = self.cond_embed_re(fluid_condition)
-            time_token += fluid_emb
-        
-        # # conditioning total interpolation steps
-        # if total_interp_steps is not None:
-        #     time_token += self.time_embed(self.MPFourier(total_interp_steps))
-        
+            # Add embedding if conditions are provided
+            cond += self.embed_re(fluid_condition)
+
         # conditioning target interpolation step
         if target_interp_step is not None:
-            time_token += self.cond_embed1(self.MPFourier_cond1(target_interp_step))
+            cond += self.embed_target_step(target_interp_step)
 
-        x[:,0, :] = x[:, 0, :] + time_token
-            
+        # conditioning total interpolation steps
+        if total_interp_steps is not None:
+            cond += self.embed_total_step(total_interp_steps)
+
+
+        x[:,0, :] = x[:, 0, :] + cond        
         if self.use_transf:
             x = x + cond
             
@@ -957,7 +951,7 @@ class Decoder(nn.Module):
                 
         for module in self.output_blocks: 
             skip = skips.pop() + cond_skips.pop()
-            x = module(torch.cat([x, skip], dim = 1), time_token)
+            x = module(torch.cat([x, skip], dim = 1), cond)
 
         # Final convolutional layer
         x = self.final_layer(x)  # Shape: [B, C_out, H, W]
@@ -974,8 +968,7 @@ def FLEX(
         norm_layer = nn.LayerNorm,
         use_checkpoint = False,
         skip = True,
-        use_transf = False,
-        cond_snapshots = 2,
+        use_transf = False
     ):
 
     # if model_size == 'small':
@@ -1010,19 +1003,19 @@ def FLEX(
         raise ValueError("size not found")
     
     base_encoder = Encoder(
-            img_size = image_size,
-            in_chans = in_channels,
-            in_conds = 1, # noise
-            model_channels = model_channels,
-            num_res_blocks = encoder_res_blocks,
-            depth = depth,       
-            num_heads = num_heads,    
-            mlp_ratio = mlp_ratio,
-            attn_drop = attn_drop,
-            mlp_drop = mlp_drop,
-            norm_layer = norm_layer,
-            use_checkpoint = use_checkpoint,
-        )
+        img_size = image_size,
+        in_chans = in_channels,
+        in_conds = 1, # noise
+        model_channels = model_channels,
+        num_res_blocks = encoder_res_blocks,
+        depth = depth,       
+        num_heads = num_heads,    
+        mlp_ratio = mlp_ratio,
+        attn_drop = attn_drop,
+        mlp_drop = mlp_drop,
+        norm_layer = norm_layer,
+        use_checkpoint = use_checkpoint,
+    )
 
     # forecast_encoder =  Encoder(
     #     img_size=image_size,
@@ -1042,36 +1035,36 @@ def FLEX(
     # )
 
     task_encoder = Encoder(
-            img_size = image_size,
-            in_chans = in_channels + 1,
-            in_conds = 1,
-            use_time = False,
-            model_channels = model_channels,
-            num_res_blocks = encoder_res_blocks,
-            depth = depth,       
-            num_heads = num_heads,    
-            mlp_ratio = mlp_ratio,
-            attn_drop = attn_drop,
-            mlp_drop = mlp_drop,
-            norm_layer = norm_layer,
-            use_checkpoint = use_checkpoint,
-            use_transf = use_transf,
-        )
+        img_size = image_size,
+        in_chans = in_channels + 1,
+        in_conds = 1,
+        use_time = False,
+        model_channels = model_channels,
+        num_res_blocks = encoder_res_blocks,
+        depth = depth,       
+        num_heads = num_heads,    
+        mlp_ratio = mlp_ratio,
+        attn_drop = attn_drop,
+        mlp_drop = mlp_drop,
+        norm_layer = norm_layer,
+        use_checkpoint = use_checkpoint,
+        use_transf = use_transf,
+    )
     
     base_decoder = Decoder(
-            img_size = image_size,
-            out_chans = out_channels,
-            model_channels = model_channels,
-            num_res_blocks = decoder_res_blocks,
-            depth = depth,       
-            num_heads = num_heads,    
-            mlp_ratio = mlp_ratio,
-            attn_drop = attn_drop,
-            mlp_drop = mlp_drop,
-            norm_layer = norm_layer,
-            use_checkpoint = use_checkpoint,
-            use_transf = use_transf,
-            skip = skip,
-        )
+        img_size = image_size,
+        out_chans = out_channels,
+        model_channels = model_channels,
+        num_res_blocks = decoder_res_blocks,
+        depth = depth,       
+        num_heads = num_heads,    
+        mlp_ratio = mlp_ratio,
+        attn_drop = attn_drop,
+        mlp_drop = mlp_drop,
+        norm_layer = norm_layer,
+        use_checkpoint = use_checkpoint,
+        use_transf = use_transf,
+        skip = skip,
+    )
 
     return base_encoder, task_encoder, base_decoder
