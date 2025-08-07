@@ -9,7 +9,7 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 # from torch.distributed import init_process_group, destroy_process_group
 from torch.distributed import init_process_group, destroy_process_group, barrier, get_rank, is_initialized, all_reduce, get_world_size
-from src.lion import Lion  # optional Lion optimiser
+from src.lion import Lion
 from diffusers.optimization import get_linear_schedule_with_warmup as scheduler
 from src.unet import UNet
 from src.flex import FLEX
@@ -95,14 +95,12 @@ class Trainer:
             target_interp_step,
             total_interp_steps
         )
-
         loss.backward()
         if isinstance(self.model.module, DiffusionModel):
             torch.nn.utils.clip_grad_norm_(self.model.module.parameters(), 1.)
         self.optimizer.step()
         self.lr_scheduler.step()
         self.model.module.ema.update()
-        
         return loss.item()
 
     def _run_epoch(self, epoch):        
@@ -131,22 +129,23 @@ class Trainer:
             loss_values_task.append(loss_task)
 
         self.run.log({"Task loss": np.mean(loss_values_task)})
-        self.run.log({"Contrastive loss": 0})  
+        # self.run.log({"Contrastive loss": 0})  
             
         return loss_values_task
 
     def _generate_samples(self, epoch):
         # sample_path = f"./train_samples_{self.run_name}_step{self.total_interp_steps}_lastStep{self.use_last_snapshot}_woT_onehot"
         sample_dir = "./samples"
-        os.makedirs(sample_dir, exist_ok=True)
+        os.makedirs(sample_dir, exist_ok = True)
 
-        sample_path = f"{sample_dir}/train_samples_{}".format(
-            self.run_name, 
+        sample_path = "{}/train_samples_{}".format(
+            sample_dir,
+            self.run_name
         )
-        os.makedirs(sample_path, exist_ok=True)
+        os.makedirs(sample_path, exist_ok = True)
 
         with self.model.module.ema.average_parameters():
-            
+
             self.model.eval()
             with torch.no_grad():
                 self.train_loader.sampler.set_epoch(1)
@@ -177,7 +176,6 @@ class Trainer:
                     total_interp_steps,
                     self.local_gpu_id
                 )
-
         plot_samples(samples, condition_start, targets, sample_path, epoch)
         print(f"Epoch {epoch} | Generated samples saved at {sample_path}")
 
@@ -187,7 +185,8 @@ class Trainer:
 
         # save_path = f"{checkpoint_dir}/checkpoint_{self.run_name}_step{self.total_interp_steps}_lastStep{self.use_last_snapshot}{name}_woT_onehot.pt".format()
 
-        save_path = f"{checkpoint_dir}/checkpoint_{}.pt".format(
+        save_path = "{}/checkpoint_{}.pt".format(
+            checkpoint_dir,
             self.run_name
         )
         
@@ -283,20 +282,35 @@ def load_train_objs(args):
             criterion = torch.nn.L1Loss() # maybe l2?
         )
         # choose optimizer
-        ema = ExponentialMovingAverage(model.parameters(), decay=0.999)
-        optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+        ema = ExponentialMovingAverage(
+            model.parameters(), 
+            decay = 0.999
+        )
+        if args.optimizer == 'adam':
+            optimizer = torch.optim.Adam(
+                model.parameters(), 
+                lr = args.learning_rate
+            )
+        elif args.optimizer == 'lion':
+            optimizer = Lion(
+                model.parameters(), 
+                lr = args.learning_rate
+            )
+        else:
+            print("Only Adam and Lion are supported.")
+            sys.exit()
     
     return train_set, model, optimizer, ema
 
 def prepare_dataloader(dataset: Dataset, batch_size: int):
     return DataLoader(
         dataset,
-        batch_size=batch_size,
-        pin_memory=True,
-        shuffle=False,
-        sampler=DistributedSampler(dataset),
-        num_workers=8,
-        drop_last=True
+        batch_size = batch_size,
+        pin_memory = True,
+        shuffle = False,
+        sampler = DistributedSampler(dataset),
+        num_workers = 8,
+        drop_last = True
     )
 
 def main(
@@ -335,7 +349,7 @@ def main(
     # Model summary
     print('**************')
     print('Total model params: %.2fM' % (
-            sum(p.numel() for p in model.parameters())/1000000.0
+            sum(p.numel() for p in model.parameters()) / 1000000.0
         )
     )
     print('**************')
@@ -352,7 +366,6 @@ def main(
         run = run, 
         run_name = args.run_name
     )
-    
     trainer.train(epochs)
     end = time.time()
     print("Training time: ", end - start)
@@ -360,7 +373,6 @@ def main(
 
 if __name__ == "__main__":
     import argparse
-
     parser = argparse.ArgumentParser(
         description = 'FLEX for Temporal Interpolation'
     )
@@ -378,6 +390,12 @@ if __name__ == "__main__":
         help = 'How often to save a snapshot'
     )
     # Training parameters
+    parser.add_argument(
+        "--optimizer", 
+        type = str, 
+        default = 'adam', 
+        help = "Optimizer: adam or lion"
+    )
     parser.add_argument(
         '--epochs', 
         default = 200, 
@@ -409,6 +427,12 @@ if __name__ == "__main__":
     #     type=int, 
     #     help='different prediction steps to condition on'
     # )
+    parser.add_argument(
+        "--is_T_fixed", 
+        default = True,
+        type = lambda x: (str(x).lower() == 'true'), 
+        help = "fix or change T in training."
+    )
     parser.add_argument(
         '--patch_size', 
         default = 256, 
@@ -466,8 +490,15 @@ if __name__ == "__main__":
     print('Launching processes...')
     
     # wandb.login()
-    wandb.login(key="5282eaefee2cb8f881265effb6251abf1703deee")
-    
+    wandb.login(key = "5282eaefee2cb8f881265effb6251abf1703deee")
+    args.run_name = "Model_{}_Optim_{}_lr{}_epoch{}_stride{}_Tfixed{}".format(
+            args.model,
+            args.optimizer,
+            args.learning_rate,
+            args.epochs,
+            args.stride,
+            args.is_T_fixed
+    )
     run = wandb.init(
         # Set the project where this run will be logged
         project="InterpDM",

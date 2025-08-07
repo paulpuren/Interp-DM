@@ -238,7 +238,12 @@ class ResBlock(TimestepBlock):
         self.in_layers = nn.Sequential(
             nn.GroupNorm(32, channels),
             nn.SiLU(),
-            nn.Conv2d(channels, self.out_channels, 3, padding = 1),
+            nn.Conv2d(
+                channels, 
+                self.out_channels, 
+                3, 
+                padding = 1
+            ),
         )
 
         self.updown = up or down
@@ -256,7 +261,11 @@ class ResBlock(TimestepBlock):
             nn.SiLU(),
             nn.Linear(
                 emb_channels,
-                2 * self.out_channels if use_scale_shift_norm else self.out_channels,
+                (
+                    2 * self.out_channels 
+                    if use_scale_shift_norm 
+                    else self.out_channels
+                ),
             ),
         )
         self.out_layers = nn.Sequential(
@@ -264,7 +273,12 @@ class ResBlock(TimestepBlock):
             nn.SiLU(),
             nn.Dropout(p = dropout),
             zero_module(
-                nn.Conv2d(self.out_channels, self.out_channels, 3, padding = 1)
+                nn.Conv2d(
+                    self.out_channels, 
+                    self.out_channels, 
+                    3, 
+                    padding = 1
+                )
             ),
         )
 
@@ -293,7 +307,11 @@ class ResBlock(TimestepBlock):
         :return: an [N x C x ...] Tensor of outputs.
         """
         if self.use_checkpoint:
-            return torch.utils.checkpoint.checkpoint(self._forward, x, emb)
+            return torch.utils.checkpoint.checkpoint(
+                self._forward, 
+                x, 
+                emb
+            )
         else:
             return self._forward(x, emb)
         
@@ -485,7 +503,7 @@ class FourierEmbed(nn.Module):
     def __init__(
             self,
             embed_dim, 
-            use_mp_fourier=True
+            use_mp_fourier = True
         ):
 
         super().__init__()
@@ -536,39 +554,23 @@ class Encoder(nn.Module):
         
         if self.use_time:
             # Time embedding module for diffusion time-steps
-            self.embed_diff_time = FourierEmbed(self.embed_dim, use_mp_fourier=True)
-            # self.MPFourier = MPFourier(self.embed_dim)        
-            # self.time_embed = nn.Sequential(
-            #     nn.Linear(self.embed_dim, self.embed_dim * 2),
-            #     nn.SiLU(),
-            #     nn.Linear(self.embed_dim * 2, self.embed_dim),
-            # )
-        
-        # continuous embedding for fluid conditions          
-        # self.cond_embed_re = nn.Sequential(
-        #     nn.Linear(self.in_conds, 2 * self.embed_dim),
-        #     nn.SiLU(),
-        #     nn.Linear(self.embed_dim * 2, self.embed_dim),
-        # )
-        self.embed_re = FourierEmbed(self.embed_dim, use_mp_fourier=True)
+            self.embed_diff_time = FourierEmbed(
+                self.embed_dim, 
+                use_mp_fourier=True
+            )
 
-        # continuous embedding for target interpolate step          
-        # self.MPFourier_cond1 = MPFourier(self.embed_dim) 
-        # self.cond_embed1 = nn.Sequential(
-        #     nn.Linear(self.embed_dim, 2*self.embed_dim),
-        #     nn.SiLU(),
-        #     nn.Linear(self.embed_dim * 2, self.embed_dim),
-        # )
-        self.embed_target_step = FourierEmbed(self.embed_dim, use_mp_fourier=True)
-
-        # continuous embedding for total interpolate step          
-        # self.MPFourier_cond2 = MPFourier(self.embed_dim) 
-        # self.cond_embed2 = nn.Sequential(
-        #     nn.Linear(self.embed_dim, 2*self.embed_dim),
-        #     nn.SiLU(),
-        #     nn.Linear(self.embed_dim * 2, self.embed_dim),
-        # )
-        self.embed_total_step = FourierEmbed(self.embed_dim, use_mp_fourier=True)
+        self.embed_re = FourierEmbed(
+            self.embed_dim, 
+            use_mp_fourier = True
+        )
+        self.embed_target_step = FourierEmbed(
+            self.embed_dim,
+            use_mp_fourier = True
+        )
+        self.embed_total_step = FourierEmbed(
+            self.embed_dim, 
+            use_mp_fourier = True
+        )
 
         # one-hot encoding for fluid conditions
         # self.label_emb = nn.Embedding(time_interp_index, self.embed_dim)
@@ -705,12 +707,10 @@ class Encoder(nn.Module):
 
         # conditioning reynolds number
         if fluid_condition is not None:
-            # Add embedding if conditions are provided
             cond = self.embed_re(fluid_condition)
 
-        # conditioning diffusion timesteps
+        # conditioning diffusion time-steps
         if self.use_time:
-            # Create time token
             cond += self.embed_diff_time(timesteps)
         
         # conditioning target interpolation step
@@ -785,7 +785,7 @@ class Decoder(nn.Module):
         self.embed_target_step = FourierEmbed(self.embed_dim, use_mp_fourier=True)
         self.embed_total_step = FourierEmbed(self.embed_dim, use_mp_fourier=True)
 
-        # Decoder blocks (second half of the U-Net), with optional skip connections
+        # Decoder blocks (second half of the U-Net)
         self.tr_blocks = nn.ModuleList(
             [
                 Block(
@@ -878,7 +878,6 @@ class Decoder(nn.Module):
 
         self.apply(_init_weights)
 
-        
     @torch.jit.ignore
     def no_weight_decay(self):
         # Specify parameters that should not be decayed
@@ -903,10 +902,6 @@ class Decoder(nn.Module):
         :param y: Optional class labels of shape [B]
         :return: Output images of shape [B, C_out, H, W]
         """
-
-        # conditioning diffusion timesteps
-        cond = self.time_embed(self.MPFourier(timesteps))
-
         # conditioning diffusion timesteps
         cond = self.embed_diff_time(timesteps)
 
@@ -922,7 +917,6 @@ class Decoder(nn.Module):
         # conditioning total interpolation steps
         if total_interp_steps is not None:
             cond += self.embed_total_step(total_interp_steps)
-
 
         x[:,0, :] = x[:, 0, :] + cond        
         if self.use_transf:

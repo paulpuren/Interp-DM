@@ -41,13 +41,15 @@ def logsnr_schedule_cosine(
 # used by most modern parameterisations (x₀, ε, or v) 
 def get_logsnr_alpha_sigma(
         time: torch.Tensor,
-        shift: float = 16.0,  # NOTE: 16.0 follows the "imagen" implementation; set to 1.0 to match
+        shift: float = 16.0,  
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Return `(logsnr, α, σ)` broadcastable to (B, 1, 1, 1).
 
     The helper expands the 1‑D time tensor into per‑sample log‑SNR plus its derived
     coefficients α and σ such that subsequent point‑wise arithmetic broadcasts cleanly
     over spatial dimensions.
+
+    Note: 16.0 follows the "imagen" implementation; set to 1.0 to match
     """
     logsnr = logsnr_schedule_cosine(time, shift=shift)[:, None, None, None]
     alpha = torch.sqrt(torch.sigmoid(logsnr))       # α = (SNR / (1+SNR))^½
@@ -86,8 +88,8 @@ class DiffusionModel(nn.Module):
         ) -> None:
         super().__init__()
         assert prediction_type in {"v", "eps", "x"}, (
-                "Prediction_type must be one of 'v', 'eps', 'x'"
-            )
+            "Prediction_type must be one of 'v', 'eps', 'x'"
+        )
         self.prediction_type = prediction_type
 
         # Sub‑modules 
@@ -113,8 +115,8 @@ class DiffusionModel(nn.Module):
             target_interp_step = torch.Tensor,
             total_interp_steps = torch.Tensor
         ) -> torch.Tensor:
-        
-        """Compute per‑pixel loss for a *single random* diffusion timestep.
+        """
+        Compute per‑pixel loss for a *single random* diffusion timestep.
 
         The routine implements the standard diffusion training recipe:
 
@@ -126,29 +128,20 @@ class DiffusionModel(nn.Module):
         The target and condition snapshots shape: (B,C,H,W)
         """
 
-        # TODO: check the numpy int or pytorch tensor
         # get the target interpolation step
         target_interp_step = target_interp_step.float()
         target_interp_step_scalar = target_interp_step.view(-1)[0]
 
-        # total_interp_steps = total_interp_steps.float()
-        total_interp_steps_scalar = torch.tensor(
-                (total_interp_steps + 1), 
-                dtype=torch.float32, 
-                device=target_interp_step.device
-            )
-
-        # total_interp_steps = total_interp_steps.expand_as(target_interp_step)
-        delta = target_interp_step_scalar / total_interp_steps_scalar
+        # get the total number of interpolation steps
+        total_interp_steps = total_interp_steps.float()
+        total_interp_steps_scalar = total_interp_steps.view(-1)[0] + 1.0
 
         # estimate the intermittent conditioning frame
+        delta = target_interp_step_scalar / total_interp_steps_scalar
         est_snapshot = (1 - delta) * cond_snapshot_start + delta * cond_snapshot_end
 
         # the refinement to be learned 
         refinement = target_snapshot - est_snapshot  # (B,C,H,W)
-
-        # # 0. the residual between the target and the first snapshot
-        # residual_sr = snapshots - cond_snapshot_start  # x₀  (B,C,H,W)
 
         # 1. random timestep t ∼ 𝕌(0,1) and corresponding schedule coefficients 
         t = torch.rand(refinement.shape[0], device = refinement.device)
@@ -162,36 +155,36 @@ class DiffusionModel(nn.Module):
         # 3.1 conditioning start and end snapshots (provides skip connections)
         # (B,C,H,W)
         cond_input_snapshots = torch.cat(
-                (cond_snapshot_start, cond_snapshot_end), 
-                dim = 1
-            )
+            (cond_snapshot_start, cond_snapshot_end), 
+            dim = 1
+        )
         
         head_sr, skips_sr = self.task_encoder(
-                cond_input_snapshots,
-                fluid_condition = fluid_condition
-            )
+            cond_input_snapshots,
+            fluid_condition = fluid_condition
+        )
 
         # 3.2 diffusion path (main U‑Net)
         h, skips = self.encoder(
-                residual_t, 
-                t, 
-                fluid_condition = fluid_condition, 
-                cond_skips = skips_sr,
-                target_interp_step = target_interp_step,
-                total_interp_steps = total_interp_steps
-            )
+            residual_t, 
+            t, 
+            fluid_condition = fluid_condition, 
+            cond_skips = skips_sr,
+            target_interp_step = target_interp_step,
+            total_interp_steps = total_interp_steps
+        )
 
         # 3.3 Decoder merges streams + timestep embedding
         pred = self.decoder(
-                h, 
-                skips, 
-                head_sr, 
-                skips_sr, 
-                t, 
-                fluid_condition = fluid_condition,
-                target_interp_step = target_interp_step,
-                total_interp_steps = total_interp_steps
-            ) 
+            h, 
+            skips, 
+            head_sr, 
+            skips_sr, 
+            t, 
+            fluid_condition = fluid_condition,
+            target_interp_step = target_interp_step,
+            total_interp_steps = total_interp_steps
+        ) 
 
         # 4. Convert *pred* to the correct target space
         if self.prediction_type == "x":
@@ -249,9 +242,9 @@ class DiffusionModel(nn.Module):
 
         # concatenate the conditioning snapshots with shape of (B,C,H,W)
         cond_input_snapshots = torch.cat(
-                (cond_snapshot_start, cond_snapshot_end), 
-                dim = 1
-            ) 
+            (cond_snapshot_start, cond_snapshot_end), 
+            dim = 1
+        ) 
 
         # alias for brevity
         model_head = self.task_encoder  
@@ -260,53 +253,53 @@ class DiffusionModel(nn.Module):
         for time_step in range(self.diff_steps, 0, -1):
             # Current and previous (t‑1) timesteps normalised to [0,1]
             t = torch.full(
-                    (n_sample,),  
-                    time_step / self.diff_steps,  
-                    device = device
-                )
+                (n_sample,),  
+                time_step / self.diff_steps,  
+                device = device
+            )
             
             t_ = torch.full(
-                    (n_sample,), 
-                    (time_step - 1) / self.diff_steps, 
-                    device = device
-                )
+                (n_sample,), 
+                (time_step - 1) / self.diff_steps, 
+                device = device
+            )
 
             _, alpha, sigma = get_logsnr_alpha_sigma(
-                    t,  
-                    shift = self.logsnr_shift
-                )
+                t,  
+                shift = self.logsnr_shift
+            )
             
             _, alpha_, sigma_ = get_logsnr_alpha_sigma(
-                    t_, 
-                    shift = self.logsnr_shift
-                )
+                t_, 
+                shift = self.logsnr_shift
+            )
 
             # 1.1 task encoder
             pred_head, skip_head = model_head(
-                    cond_input_snapshots, 
-                    fluid_condition = fluid_condition
-                )
+                cond_input_snapshots, 
+                fluid_condition = fluid_condition
+            )
 
             # 1.2 Main U‑Net forward ----
             h, skip = self.encoder(
-                    snapshots_i, 
-                    t, 
-                    fluid_condition = fluid_condition, 
-                    cond_skips = skip_head,
-                    target_interp_step = target_interp_step,
-                    total_interp_steps = total_interp_steps
-                )
+                snapshots_i, 
+                t, 
+                fluid_condition = fluid_condition, 
+                cond_skips = skip_head,
+                target_interp_step = target_interp_step,
+                total_interp_steps = total_interp_steps
+            )
 
             pred = self.decoder(
-                    h, 
-                    skip, 
-                    pred_head, 
-                    skip_head, 
-                    t, 
-                    fluid_condition = fluid_condition,
-                    target_interp_step = target_interp_step,
-                    total_interp_steps = total_interp_steps
-                )
+                h, 
+                skip, 
+                pred_head, 
+                skip_head, 
+                t, 
+                fluid_condition = fluid_condition,
+                target_interp_step = target_interp_step,
+                total_interp_steps = total_interp_steps
+            )
 
             # 1.3 Convert network output to (mean, eps) pair
             if self.prediction_type == "v":
@@ -333,18 +326,11 @@ class DiffusionModel(nn.Module):
         # Estimate the intermittent snapshot using linear interpolation
         target_interp_step = target_interp_step.float()
         target_interp_step_scalar = target_interp_step.view(-1)[0]
-
-        # total_interp_steps = total_interp_steps.float()
-        total_interp_steps_scalar = torch.tensor(
-                (total_interp_steps + 1), 
-                dtype = torch.float32, 
-                device = target_interp_step.device
-            )
-
-        # total_interp_steps = total_interp_steps.expand_as(target_interp_step)
-        delta = target_interp_step_scalar / total_interp_steps_scalar
+        total_interp_steps = total_interp_steps.float()
+        total_interp_steps_scalar = total_interp_steps.view(-1)[0] + 1.0
 
         # estimate the intermittent conditioning frame
+        delta = target_interp_step_scalar / total_interp_steps_scalar
         est_snapshot = (1 - delta) * cond_snapshot_start + delta * cond_snapshot_end
 
         # the final prediction is the learned refinement    
