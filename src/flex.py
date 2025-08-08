@@ -558,7 +558,6 @@ class Encoder(nn.Module):
                 self.embed_dim, 
                 use_mp_fourier=True
             )
-
         self.embed_re = FourierEmbed(
             self.embed_dim, 
             use_mp_fourier = True
@@ -691,7 +690,7 @@ class Encoder(nn.Module):
             self, 
             x, 
             timesteps = None,
-            fluid_condition=None, 
+            fluid_condition = None, 
             cond_skips = None,
             target_interp_step = None,
             total_interp_steps = None
@@ -757,7 +756,7 @@ class Decoder(nn.Module):
             img_size = 256, 
             out_chans = 3,
             in_conds = 1,
-            model_channels = [128,256, 768],
+            model_channels = [128, 256, 768],
             num_res_blocks = [2, 2, 2, 2],
             depth = 12,
             num_heads = 12, 
@@ -903,22 +902,22 @@ class Decoder(nn.Module):
         :return: Output images of shape [B, C_out, H, W]
         """
         # conditioning diffusion timesteps
-        cond = self.embed_diff_time(timesteps)
+        time_token = self.embed_diff_time(timesteps)
 
         # conditioning reynolds number
         if fluid_condition is not None:
             # Add embedding if conditions are provided
-            cond += self.embed_re(fluid_condition)
+            time_token += self.embed_re(fluid_condition)
 
         # conditioning target interpolation step
         if target_interp_step is not None:
-            cond += self.embed_target_step(target_interp_step)
+            time_token += self.embed_target_step(target_interp_step)
 
         # conditioning total interpolation steps
         if total_interp_steps is not None:
-            cond += self.embed_total_step(total_interp_steps)
+            time_token += self.embed_total_step(total_interp_steps)
 
-        x[:,0, :] = x[:, 0, :] + cond        
+        x[:,0, :] = x[:, 0, :] + time_token        
         if self.use_transf:
             x = x + cond
             
@@ -945,7 +944,7 @@ class Decoder(nn.Module):
                 
         for module in self.output_blocks: 
             skip = skips.pop() + cond_skips.pop()
-            x = module(torch.cat([x, skip], dim = 1), cond)
+            x = module(torch.cat([x, skip], dim = 1), time_token)
 
         # Final convolutional layer
         x = self.final_layer(x)  # Shape: [B, C_out, H, W]
