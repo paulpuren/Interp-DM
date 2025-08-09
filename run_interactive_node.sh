@@ -7,11 +7,13 @@ conda activate /pscratch/sd/p/puren93/miniforge3/envs/sft
 
 python train.py \
     --model FLEX \
-    --batch_size 12 \
     --run_name FLEX \
+    --optimizer 'adam' \
+    --batch_size 12 \
     --learning_rate 1e-4 \
     --epochs 50 \
     --patch_size 256 \
     --stride 128 \
-    --checkpoint_path ''
+    --checkpoint_path '' \
+    --is_T_fixed True
 
