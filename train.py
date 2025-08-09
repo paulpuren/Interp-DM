@@ -84,8 +84,8 @@ class Trainer:
             total_interp_steps
         ):
         self.optimizer.zero_grad()
-        if isinstance(self.model.module, DiffusionModel):
-            reynolds_number = reynolds_number.unsqueeze(-1)
+        # if isinstance(self.model.module, DiffusionModel):
+        # reynolds_number = reynolds_number.unsqueeze(-1)
         
         loss = self.model(
             targets, 
@@ -124,7 +124,8 @@ class Trainer:
                 condition_start, 
                 condition_end, 
                 reynolds_number, 
-                target_interp_step
+                target_interp_step,
+                total_interp_steps
             )
             loss_values_task.append(loss_task)
 
@@ -163,8 +164,8 @@ class Trainer:
                 total_interp_steps = total_interp_steps.to(self.local_gpu_id)
                 # print(f'Type {type(target_interp_step)}')
 
-                if isinstance(self.model.module, DiffusionModel):
-                    reynolds_number = reynolds_number.unsqueeze(-1)
+                # if isinstance(self.model.module, DiffusionModel):
+                # reynolds_number = reynolds_number.unsqueeze(-1)
                 
                 samples = self.model.module.sample(
                     targets.shape[0],
@@ -215,10 +216,15 @@ class Trainer:
 
             if self.local_gpu_id == 0:
                 avg_loss = np.mean(loss_values)
-                print(f"Epoch {epoch} | loss {avg_loss} | learning rate {
-                        self.lr_scheduler.get_last_lr()
-                    }"
-                )
+                print("Epoch {} | loss {:.4f} | learning rate {:.6f}".format(
+                    epoch + 1, 
+                    avg_loss, 
+                    self.lr_scheduler.get_last_lr()[0]
+                ))
+                # print("Epoch {epoch} | loss {avg_loss} | learning rate {
+                #         self.lr_scheduler.get_last_lr()
+                #     }"
+                # )
                 self.run.log({"loss": avg_loss})
 
                 # Save the last and best checkpoint
@@ -261,7 +267,8 @@ def load_train_objs(args):
         patch_size = args.patch_size, 
         stride = args.stride,
         scratch_dir = args.scratch_dir,
-        train = True
+        train = True,
+        is_T_fixed = args.is_T_fixed
     )
     
     ema = None # placeholder for non-FLEX model
@@ -347,12 +354,12 @@ def main(
         )
     
     # Model summary
-    print('**************')
-    print('Total model params: %.2fM' % (
+    print("**************")
+    print("Total model params: %.2fM" % (
             sum(p.numel() for p in model.parameters()) / 1000000.0
         )
     )
-    print('**************')
+    print("**************")
     
     # gpu_id: int, local_gpu_id: int,
     start = time.time()
@@ -374,7 +381,7 @@ def main(
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(
-        description = 'FLEX for Temporal Interpolation'
+        description = "FLEX for Temporal Interpolation"
     )
     # general parameters
     parser.add_argument(
@@ -384,45 +391,45 @@ if __name__ == "__main__":
         help = "Name of the current run."
     )
     parser.add_argument(
-        '--sampling_freq', 
-        default = 25, 
+        "--sampling_freq", 
+        default = 10, 
         type = int, 
-        help = 'How often to save a snapshot'
+        help = "How often to save a snapshot"
     )
     # Training parameters
     parser.add_argument(
         "--optimizer", 
         type = str, 
-        default = 'adam', 
+        default = "adam", 
         help = "Optimizer: adam or lion"
     )
     parser.add_argument(
-        '--epochs', 
+        "--epochs", 
         default = 200, 
         type = int, 
-        help = 'Total epochs to train the model'
+        help = "Total epochs to train the model"
     )
     parser.add_argument(
-        '--batch_size', 
+        "--batch_size", 
         default = 16, 
         type = int, 
-        help = 'Input batch size on each device (default: 32)'
+        help = "Input batch size on each device (default: 32)"
     )
     parser.add_argument(
-        '--learning_rate', 
+        "--learning_rate", 
         default = 2e-4, 
         type = float, 
         help = 'learning rate'
     )
     parser.add_argument(
-        '--checkpoint_path', 
-        default = '', 
+        "--checkpoint_path", 
+        default = "", 
         type = str, 
-        help = 'for reloading checkpoint and keep training'
+        help = "for reloading checkpoint and keep training"
     )
     # dataset parameters
     # parser.add_argument(
-    #     '--total_interp_steps', 
+    #     "--total_interp_steps", 
     #     default=1, 
     #     type=int, 
     #     help='different prediction steps to condition on'
@@ -434,22 +441,22 @@ if __name__ == "__main__":
         help = "fix or change T in training."
     )
     parser.add_argument(
-        '--patch_size', 
+        "--patch_size", 
         default = 256, 
         type = int, 
-        help = 'Patch size for the datasets'
+        help = "Patch size for the datasets"
     )
     parser.add_argument(
-        '--stride', 
+        "--stride", 
         default = 128, 
         type = int, 
-        help = 'Stride for the datasets'
+        help = "Stride for the datasets"
     )
     parser.add_argument(
-        '--scratch_dir',
-        default = '/global/cfs/cdirs/m4633/foundationmodel/nskt_tensor/', 
+        "--scratch_dir",
+        default = "/global/cfs/cdirs/m4633/foundationmodel/nskt_tensor/", 
         type = str, 
-        help = 'Directory for the dataset'
+        help = "Directory for the dataset"
     )
     # Diffusion parameters
     parser.add_argument(
@@ -473,16 +480,16 @@ if __name__ == "__main__":
     # model parameters
     parser.add_argument(
         "--model", 
-        type=str, 
-        default='FLEX', 
-        help="model"
+        type = str, 
+        default = 'FLEX', 
+        help = "model"
     )    
     # U-Net parameters
     parser.add_argument(
         "--base_width", 
-        type=int, 
-        default=64, 
-        help="Basewidth of U-Net"
+        type = int, 
+        default = 64, 
+        help = "Basewidth of U-Net"
     )    
     args = parser.parse_args()
 
@@ -501,15 +508,15 @@ if __name__ == "__main__":
     )
     run = wandb.init(
         # Set the project where this run will be logged
-        project="InterpDM",
-        name=args.run_name,
+        project = "InterpDM",
+        name = args.run_name,
         # Track hyperparameters and run metadata
-        config={
+        config = {
             "learning_rate": args.learning_rate,
             "epochs": args.epochs,
             "batch size": args.batch_size,
-            "upsampling factor": args.factor,
-            "total_interp_steps": args.total_interp_steps
+            # "upsampling factor": args.factor,
+            # "total_interp_steps": args.total_interp_steps
         },
     )
 
@@ -529,7 +536,7 @@ if __name__ == "__main__":
     else:
         mp.spawn(
             main, 
-            args=(
+            args = (
                 world_size, 
                 args.sampling_freq, 
                 args.epochs, 
@@ -537,6 +544,6 @@ if __name__ == "__main__":
                 run, 
                 args
             ), 
-            nprocs=world_size
+            nprocs = world_size
         )
 
