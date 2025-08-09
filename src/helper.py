@@ -10,12 +10,10 @@ from mpl_toolkits.axes_grid1.inset_locator import mark_inset
 # import cartopy.crs as ccrs
 
 from src.flex import FLEX
-from src.diffusion_model_sr import DiffusionModel
+from src.diffusion_model import DiffusionModel
 from torch.utils.data import Dataset, DataLoader
 from torch_ema import ExponentialMovingAverage
-
 from numpy.typing import ArrayLike
-
 
 def stich(input, res=128, target_res=256):
     
