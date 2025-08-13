@@ -31,7 +31,8 @@ def ddp_setup(local_rank, world_size):
         init_process_group(
             backend = "gloo", # nccl for multi-gpu, gloo for single-gpu
             rank = local_rank, 
-            world_size = world_size)
+            world_size = world_size
+        )
         rank = local_rank
         
     else:
@@ -391,6 +392,12 @@ if __name__ == "__main__":
         help = "Name of the current run."
     )
     parser.add_argument(
+        "--data_name", 
+        type = str, 
+        default = 'nskt', 
+        help = "Name of the dataset."
+    )
+    parser.add_argument(
         "--sampling_freq", 
         default = 10, 
         type = int, 
@@ -498,8 +505,9 @@ if __name__ == "__main__":
     
     # wandb.login()
     wandb.login(key = "5282eaefee2cb8f881265effb6251abf1703deee")
-    args.run_name = "Model_{}_Optim_{}_lr{}_epoch{}_stride{}_Tfixed{}".format(
+    args.run_name = "Model_{}_Data_{}_Optim_{}_lr{}_epoch{}_stride{}_Tfixed{}".format(
             args.model,
+            args.data_name,
             args.optimizer,
             args.learning_rate,
             args.epochs,
