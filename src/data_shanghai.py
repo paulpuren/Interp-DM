@@ -82,13 +82,38 @@ class Shanghai(Dataset):
     
     def __getitem__(self, index):
 
-        with h5py.File(self.data_path,'r') as f:
+        with h5py.File(self.data_path, 'r') as f:
             # numpy array: (25, 565, 784), dtype=uint8, range(0,70)
+            # 25 is seq len
             imgs = f[self.type][str(index)][()]   
             frames = torch.from_numpy(imgs).float().squeeze() 
             frames = frames / 255.0
-            frames = self.transform(frames)     
-        return frames.unsqueeze(1) # (25,1,128,128)
+            frames = self.transform(frames)  # [25, 128, 128]   
+        # frames = frames.unsqueeze(1) # (25,1,128,128)
+
+        # MODIFIED BY PU REN
+        # define a random total pred steps
+        total_interp_steps = np.random.randint(5, 20)
+
+        # define a random time index for the target within the range of predicted steps
+        target_interp_step = np.random.randint(0, total_interp_steps) + 1
+
+        # extract the input patch
+        condition_start = frames[0].unsqueeze(0)
+        condition_end = frames[total_interp_steps + 1].unsqueeze(0)
+        inputs = [condition_start, condition_end]
+        
+        # extract the target patch
+        targets = frames[target_interp_step].unsqueeze(0)
+
+        cond_params = [
+            torch.tensor(target_interp_step, dtype=torch.float32), 
+            torch.tensor(0.0,  dtype=torch.float32),
+            torch.tensor(total_interp_steps, dtype=torch.float32)
+        ]
+        
+        return inputs, targets, cond_params
+    
 
 def gray2color(image, **kwargs):
 
@@ -109,15 +134,15 @@ if __name__ == '__main__':
     sample2 = dataset.sample()
 
     print(len(dataset))
-    print(sample1.shape, sample2.shape)
-    print(sample1.min(), sample1.max())
-    print(sample2.min(), sample2.max())
-    print(sample1[0,0].numpy())
-    import matplotlib.pyplot as plt
+    # print(sample1.shape, sample2.shape)
+    # print(sample1.min(), sample1.max())
+    # print(sample2.min(), sample2.max())
+    # print(sample1[0,0].numpy())
+    # import matplotlib.pyplot as plt
 
-    plt.subplot(1,2,1)
-    plt.imshow(sample1[10,0].numpy())
-    plt.subplot(1,2,2)
-    plt.imshow(sample2[10,0].numpy())
-    # plt.show()
-    plt.savefig('sample.png')
+    # plt.subplot(1,2,1)
+    # plt.imshow(sample1[10,0].numpy())
+    # plt.subplot(1,2,2)
+    # plt.imshow(sample2[10,0].numpy())
+    # # plt.show()
+    # plt.savefig('sample.png')
