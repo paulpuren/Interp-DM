@@ -3,7 +3,7 @@
 #export CUDA_VISIBLE_DEVICES=6,7;  python train.py --model UNetVIT --batch-size 18 --run-name UNetVIT --learning-rate 0.0002 --epochs 300
 
 module load python
-conda activate /pscratch/sd/p/puren93/miniforge3/envs/sft
+conda activate /pscratch/sd/p/puren93/miniforge3.bak-20250811-1035/envs/sft
 
 python train.py \
     --model FLEX \
