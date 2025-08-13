@@ -94,8 +94,8 @@ class NSTK_FC(torch.utils.data.Dataset):
         condition_end = torch.from_numpy(
                 dataset[
                     time_index + (self.total_interp_steps + 1), 
-                    row_start:(row_start + self.patch_size), 
-                    col_start:(col_start + self.patch_size)
+                    row_start : (row_start + self.patch_size), 
+                    col_start : (col_start + self.patch_size)
                 ]
             ).float().unsqueeze(0)
         inputs = [condition_start, condition_end]
