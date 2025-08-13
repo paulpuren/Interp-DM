@@ -15,7 +15,12 @@ from src.unet import UNet
 from src.flex import FLEX
 from src.diffusion_model import DiffusionModel
 from src.get_data import NSKT as NSKT
+from src.data_shanghai import Shanghai
+
 from src.plotting import plot_samples
+
+import warnings
+warnings.filterwarnings("ignore")
 
 def ddp_setup(local_rank, world_size):
     """
@@ -264,14 +269,22 @@ def load_checkpoint(
 def load_train_objs(args):
     
     # load training set
-    train_set = NSKT(
-        patch_size = args.patch_size, 
-        stride = args.stride,
-        scratch_dir = args.scratch_dir,
-        train = True,
-        is_T_fixed = args.is_T_fixed
-    )
-    
+    if args.data_name == "nskt":
+        train_set = NSKT(
+            patch_size = args.patch_size, 
+            stride = args.stride,
+            scratch_dir = args.scratch_dir,
+            train = True,
+            is_T_fixed = args.is_T_fixed
+        )
+    elif args.data_name == "shanghai":
+        train_set = Shanghai(
+            data_path = args.scratch_dir,
+            img_size = args.patch_size, 
+            type = "train",
+            trans = None
+        )
+
     ema = None # placeholder for non-FLEX model
     if args.model == 'FLEX':
         encoder, task_encoder, decoder = FLEX(
@@ -337,7 +350,7 @@ def main(
     device = torch.cuda.current_device()
     print("device: ", device)
     
-    dataset, model, optimizer, ema = load_train_objs(args=args)
+    dataset, model, optimizer, ema = load_train_objs(args = args)
     train_data = prepare_dataloader(dataset, batch_size)
 
     if ema is not None:
