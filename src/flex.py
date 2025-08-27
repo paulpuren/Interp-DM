@@ -502,15 +502,16 @@ class PatchEmbed(nn.Module):
 class FourierEmbed(nn.Module):
     def __init__(
             self,
+            in_dim,
             embed_dim, 
             use_mp_fourier = True
         ):
-
         super().__init__()
+        self.in_dim = in_dim
         self.embed_dim = embed_dim
         self.use_mp_fourier = use_mp_fourier
         self.embed_layer = nn.Sequential(
-            nn.Linear(self.embed_dim, 2 * self.embed_dim),
+            nn.Linear(self.in_dim, 2 * self.embed_dim),
             nn.SiLU(),
             nn.Linear(self.embed_dim * 2, self.embed_dim),
         )
@@ -556,17 +557,26 @@ class Encoder(nn.Module):
             # Time embedding module for diffusion time-steps
             self.embed_diff_time = FourierEmbed(
                 self.embed_dim, 
-                use_mp_fourier=True
+                self.embed_dim, 
+                use_mp_fourier = True
             )
+        # self.embed_re = FourierEmbed(
+        #     1, 
+        #     self.embed_dim, 
+        #     use_mp_fourier = False
+        # )
         self.embed_re = FourierEmbed(
+            self.embed_dim, 
             self.embed_dim, 
             use_mp_fourier = True
         )
         self.embed_target_step = FourierEmbed(
+            self.embed_dim, 
             self.embed_dim,
             use_mp_fourier = True
         )
         self.embed_total_step = FourierEmbed(
+            self.embed_dim, 
             self.embed_dim, 
             use_mp_fourier = True
         )
@@ -779,10 +789,31 @@ class Decoder(nn.Module):
         self.patch_embed = PatchEmbed()
 
         # embedding module
-        self.embed_diff_time = FourierEmbed(self.embed_dim, use_mp_fourier=True)
-        self.embed_re = FourierEmbed(self.embed_dim, use_mp_fourier=True)
-        self.embed_target_step = FourierEmbed(self.embed_dim, use_mp_fourier=True)
-        self.embed_total_step = FourierEmbed(self.embed_dim, use_mp_fourier=True)
+        self.embed_diff_time = FourierEmbed(
+            self.embed_dim, 
+            self.embed_dim, 
+            use_mp_fourier = True
+        )
+        # self.embed_re = FourierEmbed(
+        #     1,
+        #     self.embed_dim, 
+        #     use_mp_fourier = False
+        # )
+        self.embed_re = FourierEmbed(
+            self.embed_dim, 
+            self.embed_dim, 
+            use_mp_fourier = True
+        )
+        self.embed_target_step = FourierEmbed(
+            self.embed_dim, 
+            self.embed_dim, 
+            use_mp_fourier = True
+        )
+        self.embed_total_step = FourierEmbed(
+            self.embed_dim, 
+            self.embed_dim, 
+            use_mp_fourier = True
+        )
 
         # Decoder blocks (second half of the U-Net)
         self.tr_blocks = nn.ModuleList(
@@ -955,7 +986,7 @@ def FLEX(
         in_channels = 1,
         out_channels = 1,
         model_size = 'small',
-        mlp_ratio = 2, # originally 2
+        mlp_ratio = 4, # originally 2
         attn_drop = 0.0, # originally 0.1
         mlp_drop = 0.2, # originally 0.1
         norm_layer = nn.LayerNorm,
@@ -963,6 +994,11 @@ def FLEX(
         skip = True,
         use_transf = False
     ):
+    '''
+    INSTRUCTIONS:
+    - mlp_ratio = 4 gives better performance.
+    - use medium size may be better.
+    '''
 
     # if model_size == 'small':
     #     model_channels = [64, 128, 128, 256]
@@ -993,7 +1029,7 @@ def FLEX(
         num_heads      = 16
 
     else:
-        raise ValueError("size not found")
+        raise ValueError("--- Size not found! ---")
     
     base_encoder = Encoder(
         img_size = image_size,
@@ -1009,23 +1045,6 @@ def FLEX(
         norm_layer = norm_layer,
         use_checkpoint = use_checkpoint,
     )
-
-    # forecast_encoder =  Encoder(
-    #     img_size=image_size,
-    #     in_chans=cond_snapshots,
-    #     in_conds = 1,
-    #     use_time = False,
-    #     model_channels=model_channels,
-    #     num_res_blocks = encoder_res_blocks,
-    #     depth=depth,       
-    #     num_heads=num_heads,    
-    #     mlp_ratio=mlp_ratio,
-    #     attn_drop=attn_drop,
-    #     mlp_drop=mlp_drop,
-    #     norm_layer=norm_layer,
-    #     use_checkpoint=use_checkpoint,
-    #     use_transf = use_transf,
-    # )
 
     task_encoder = Encoder(
         img_size = image_size,
