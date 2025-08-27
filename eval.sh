@@ -3,13 +3,17 @@
 module load python
 conda activate /pscratch/sd/p/puren93/miniforge3.bak-20250811-1035/envs/sft
 
-python eval.py \
+python eval_shanghai.py \
     --model FLEX \
+    --data_name 'shanghai' \
     --re_num_id -1 \
-    --batch_size 12 \
-    --total_interp_step 5 \
+    --batch_size 24 \
+    --total_interp_steps 18 \
+    --total_interp_steps_train 10 \
     --optimizer 'adam' \
-    --learning_rate 1e-4 \
-    --epochs 50 \
-    --is_T_fixed True \
-
+    --learning_rate 3e-4 \
+    --epochs 300 \
+    --patch_size 128 \
+    --stride 64 \
+    --is_T_fixed False \
+    --scratch_dir '/global/cfs/cdirs/m4633/puren/interp_dm/shanghai/shanghai.h5'
