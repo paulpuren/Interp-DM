@@ -149,7 +149,7 @@ class DiffusionModel(nn.Module):
 
         # 2. forward diffusion (add Gaussian noise)
         eps = torch.randn_like(refinement, device=refinement.device) # ε ∼ 𝒩(0, I)
-        residual_t = alpha * refinement + sigma * eps                # xₜ
+        residual_t = alpha * refinement + sigma * eps # xₜ
 
         # 3. forward pass
         # 3.1 conditioning start and end snapshots (provides skip connections)
