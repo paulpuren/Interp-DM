@@ -13,7 +13,6 @@ def plot_samples(
         PATH, 
         epoch
     ):
-    
     samples = samples.cpu().detach().numpy()
     cond_snapshot = cond_snapshot.cpu().detach().numpy()        
     targets = targets.cpu().detach().numpy()        
