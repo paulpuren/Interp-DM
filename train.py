@@ -14,9 +14,8 @@ from diffusers.optimization import get_linear_schedule_with_warmup as scheduler
 from src.unet import UNet
 from src.flex import FLEX
 from src.diffusion_model import DiffusionModel
-from src.get_data import NSKT as NSKT
-from src.data_shanghai import Shanghai
-
+from datasets.get_data import NSKT as NSKT
+from datasets.data_shanghai import Shanghai
 from src.plotting import plot_samples
 
 import warnings
@@ -90,8 +89,8 @@ class Trainer:
             total_interp_steps
         ):
         self.optimizer.zero_grad()
-        # if isinstance(self.model.module, DiffusionModel):
-        # reynolds_number = reynolds_number.unsqueeze(-1)
+        if isinstance(self.model.module, DiffusionModel):
+            reynolds_number = reynolds_number.unsqueeze(-1)
         
         loss = self.model(
             targets, 
@@ -120,7 +119,7 @@ class Trainer:
             targets = targets.to(self.local_gpu_id)
             
             # unpack the condition parameters
-            target_interp_step, reynolds_number, total_interp_steps = cond_params
+            target_interp_step, total_interp_steps, reynolds_number = cond_params
             reynolds_number = reynolds_number.to(self.local_gpu_id)
             target_interp_step = target_interp_step.to(self.local_gpu_id)
             total_interp_steps = total_interp_steps.to(self.local_gpu_id)
@@ -137,11 +136,9 @@ class Trainer:
 
         self.run.log({"Task loss": np.mean(loss_values_task)})
         # self.run.log({"Contrastive loss": 0})  
-            
         return loss_values_task
 
     def _generate_samples(self, epoch):
-        # sample_path = f"./train_samples_{self.run_name}_step{self.total_interp_steps}_lastStep{self.use_last_snapshot}_woT_onehot"
         sample_dir = "./samples"
         os.makedirs(sample_dir, exist_ok = True)
 
@@ -164,14 +161,14 @@ class Trainer:
                 condition_end = condition_end.to(self.local_gpu_id)
                 
                 # unpack the condition parameters
-                target_interp_step, reynolds_number, total_interp_steps = cond_params
+                target_interp_step, total_interp_steps, reynolds_number = cond_params
                 reynolds_number = reynolds_number.to(self.local_gpu_id)
                 target_interp_step = target_interp_step.to(self.local_gpu_id)
                 total_interp_steps = total_interp_steps.to(self.local_gpu_id)
                 # print(f'Type {type(target_interp_step)}')
 
-                # if isinstance(self.model.module, DiffusionModel):
-                # reynolds_number = reynolds_number.unsqueeze(-1)
+                if isinstance(self.model.module, DiffusionModel):
+                    reynolds_number = reynolds_number.unsqueeze(-1)
                 
                 samples = self.model.module.sample(
                     targets.shape[0],
@@ -190,13 +187,10 @@ class Trainer:
         checkpoint_dir = "./checkpoints"
         os.makedirs(checkpoint_dir, exist_ok=True)
 
-        # save_path = f"{checkpoint_dir}/checkpoint_{self.run_name}_step{self.total_interp_steps}_lastStep{self.use_last_snapshot}{name}_woT_onehot.pt".format()
-
         save_path = "{}/checkpoint_{}.pt".format(
             checkpoint_dir,
             self.run_name
         )
-        
         save_dict = {
             'model': self.model.module.state_dict(),
             'ema': self.model.module.ema.state_dict(),
@@ -208,13 +202,12 @@ class Trainer:
             print(f"Epoch {epoch} | Training checkpoint saved at {save_path}")
 
     def train(self, max_epochs: int):
-        print('Starting training...')
+        print('--- Starting training ---')
         self.lr_scheduler = scheduler(
             optimizer = self.optimizer,
             num_warmup_steps = len(self.train_loader) * 3, # short warmup phase
             num_training_steps = (len(self.train_loader) * max_epochs)
         )
-
         best_mse = np.inf
         self.model.train()
         for epoch in range(max_epochs):
@@ -227,10 +220,6 @@ class Trainer:
                     avg_loss, 
                     self.lr_scheduler.get_last_lr()[0]
                 ))
-                # print("Epoch {epoch} | loss {avg_loss} | learning rate {
-                #         self.lr_scheduler.get_last_lr()
-                #     }"
-                # )
                 self.run.log({"loss": avg_loss})
 
                 # Save the last and best checkpoint
@@ -291,7 +280,7 @@ def load_train_objs(args):
             image_size = args.patch_size, 
             in_channels = 1, 
             out_channels = 1,
-            model_size= 'small',
+            model_size= 'medium', # was "small"
             mlp_ratio = 2
         )
         model = DiffusionModel(
@@ -320,7 +309,6 @@ def load_train_objs(args):
         else:
             print("Only Adam and Lion are supported.")
             sys.exit()
-    
     return train_set, model, optimizer, ema
 
 def prepare_dataloader(dataset: Dataset, batch_size: int):
@@ -448,12 +436,12 @@ if __name__ == "__main__":
         help = "for reloading checkpoint and keep training"
     )
     # dataset parameters
-    # parser.add_argument(
-    #     "--total_interp_steps", 
-    #     default=1, 
-    #     type=int, 
-    #     help='different prediction steps to condition on'
-    # )
+    parser.add_argument(
+        "--total_interp_steps", 
+        default=1, 
+        type=int, 
+        help='total interpolation steps to condition on'
+    )
     parser.add_argument(
         "--is_T_fixed", 
         default = True,
@@ -518,13 +506,14 @@ if __name__ == "__main__":
     
     # wandb.login()
     wandb.login(key = "5282eaefee2cb8f881265effb6251abf1703deee")
-    args.run_name = "Model_{}_Data_{}_Optim_{}_lr{}_epoch{}_stride{}_Tfixed{}".format(
+    args.run_name = "Model_{}_Data_{}_Optim_{}_lr{}_epoch{}_stride{}_T{}_Tfixed{}".format(
             args.model,
             args.data_name,
             args.optimizer,
             args.learning_rate,
             args.epochs,
             args.stride,
+            args.total_interp_steps,
             args.is_T_fixed
     )
     run = wandb.init(
@@ -536,8 +525,7 @@ if __name__ == "__main__":
             "learning_rate": args.learning_rate,
             "epochs": args.epochs,
             "batch size": args.batch_size,
-            # "upsampling factor": args.factor,
-            # "total_interp_steps": args.total_interp_steps
+            "total_interp_steps": args.total_interp_steps
         },
     )
 
