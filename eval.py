@@ -227,7 +227,7 @@ if __name__ == "__main__":
     print("Loading the trained model...")
 
     # FLEX model
-    encoder, task_encoder, decoder = FLEX(
+    encoder, task_encoder, task_encoder_end, decoder = FLEX(
         image_size = args.target_resolution, 
         in_channels = 1, 
         out_channels = 1,
@@ -238,6 +238,7 @@ if __name__ == "__main__":
         encoder = encoder.cuda(),
         decoder = decoder.cuda(),
         task_encoder = task_encoder.cuda(),
+        task_encoder_end = task_encoder_end.cuda(),
         diff_steps = args.time_steps, #time steps for sampling
         prediction_type = args.prediction_type,
         criterion = torch.nn.L1Loss()
