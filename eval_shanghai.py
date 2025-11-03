@@ -263,17 +263,18 @@ if __name__ == "__main__":
     print("Loading the trained model...")
 
     # FLEX model
-    encoder, task_encoder, decoder = FLEX(
+    encoder, task_encoder, task_encoder_end, decoder = FLEX(
         image_size = args.patch_size, 
         in_channels = 1, 
         out_channels = 1,
-        model_size = 'small', # 'medium'
+        model_size = 'medium', # 'medium'
         mlp_ratio = 2
     )
     model = DiffusionModel(
         encoder = encoder.cuda(),
         decoder = decoder.cuda(),
         task_encoder = task_encoder.cuda(),
+        task_encoder_end = task_encoder_end.cuda(),
         diff_steps = args.time_steps, #time steps for sampling
         prediction_type = args.prediction_type,
         criterion = torch.nn.L1Loss()
@@ -285,7 +286,7 @@ if __name__ == "__main__":
 
     # model save path
     checkpoint_dir = './checkpoints'
-    run_name = "Model_{}_Data_{}_Optim_{}_lr{}_epoch{}_stride{}_T{}_Tfixed{}".format(
+    run_name = "Model2_interp_skip0.1_{}_Data_{}_Optim_{}_lr{}_epoch{}_stride{}_T{}_Tfixed{}".format(
             args.model,
             args.data_name,
             args.optimizer,
@@ -299,6 +300,7 @@ if __name__ == "__main__":
         checkpoint_dir,
         run_name
     )
+    print(f'Loading from {save_path}')
     # save_path = "./checkpoints/checkpoint_Model_FLEX_Data_shanghai_Optim_adam_lr0.0003_epoch200_stride128_TfixedFalse.pt"
     checkpoint = torch.load(save_path, weights_only = True)
     model.load_state_dict(checkpoint["model"])
