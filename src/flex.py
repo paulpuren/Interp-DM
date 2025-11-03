@@ -6,7 +6,7 @@ import torch.nn.functional as F
 import einops
 import torch.utils.checkpoint
 from abc import abstractmethod
-from .common import NoScaleDropout, Base2FourierFeatures, timestep_embedding, MPFourier
+from .common import NoScaleDropout, MPFourier
 
 class TimestepBlock(nn.Module):
     """
@@ -734,7 +734,7 @@ class Encoder(nn.Module):
         for layer, module in enumerate(self.input_blocks):
             x = module(x, cond)
             if cond_skips is not None:
-                x = x + cond_skips[layer]
+                x = x + cond_skips[layer] * 0.1 # TODO: * 0.1 on skips
             skips.append(x)
 
         if self.use_transf:            
@@ -794,6 +794,7 @@ class Decoder(nn.Module):
             self.embed_dim, 
             use_mp_fourier = True
         )
+        # TODO: change back 
         # self.embed_re = FourierEmbed(
         #     1,
         #     self.embed_dim, 
@@ -957,7 +958,7 @@ class Decoder(nn.Module):
             skip = skips.pop() 
             if self.use_transf:
                 if self.skip:
-                    skip = skip + cond_skips.pop()
+                    skip = skip + cond_skips.pop() # TODO: * 0.1 on skips
                 else:
                     cond_skips.pop()
                     
@@ -974,7 +975,7 @@ class Decoder(nn.Module):
             x = x + cond
                 
         for module in self.output_blocks: 
-            skip = skips.pop() + cond_skips.pop()
+            skip = skips.pop() + cond_skips.pop() * 0.1 # TODO: * 0.1 on skips
             x = module(torch.cat([x, skip], dim = 1), time_token)
 
         # Final convolutional layer
@@ -1048,7 +1049,24 @@ def FLEX(
 
     task_encoder = Encoder(
         img_size = image_size,
-        in_chans = in_channels + 1,
+        in_chans = in_channels, # in_channels + 1
+        in_conds = 1,
+        use_time = False,
+        model_channels = model_channels,
+        num_res_blocks = encoder_res_blocks,
+        depth = depth,       
+        num_heads = num_heads,    
+        mlp_ratio = mlp_ratio,
+        attn_drop = attn_drop,
+        mlp_drop = mlp_drop,
+        norm_layer = norm_layer,
+        use_checkpoint = use_checkpoint,
+        use_transf = use_transf,
+    )
+
+    task_encoder_end = Encoder(
+        img_size = image_size,
+        in_chans = in_channels,
         in_conds = 1,
         use_time = False,
         model_channels = model_channels,
@@ -1079,4 +1097,4 @@ def FLEX(
         skip = skip,
     )
 
-    return base_encoder, task_encoder, base_decoder
+    return base_encoder, task_encoder, task_encoder_end, base_decoder
