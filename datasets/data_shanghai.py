@@ -49,12 +49,14 @@ class Shanghai(Dataset):
             img_size, 
             type = 'train', 
             trans = None, 
+            total_interp_steps = 20,
             seq_len = -1
         ):
         super().__init__()
         self.pixel_scale = PIXEL_SCALE
         self.data_path = data_path
         self.img_size = img_size
+        self.total_interp_steps = total_interp_steps
 
         assert type in ['train', 'test', 'val']
         self.type = type if type!='val' else 'test'
@@ -91,10 +93,13 @@ class Shanghai(Dataset):
             frames = self.transform(frames)  # [25, 128, 128]   
         # frames = frames.unsqueeze(1) # (25,1,128,128)
 
-        # MODIFIED BY PU REN
+        # --- MODIFIED BY PU REN ---
         # define a random total pred steps
         # total_interp_steps = np.random.randint(5, 20)
-        total_interp_steps = np.random.randint(2, 5)
+        total_interp_steps = np.random.randint(
+            self.total_interp_steps // 2, 
+            self.total_interp_steps
+        )
 
         # define a random time index for the target within the range of predicted steps
         target_interp_step = np.random.randint(0, total_interp_steps) + 1
