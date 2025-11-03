@@ -10,6 +10,7 @@ import numpy as np
 import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
+from .common import NoScaleDropout, MPFourier
 
 class GroupNorm32(nn.GroupNorm):
     def forward(self, x):
@@ -45,17 +46,17 @@ def avg_pool_nd(dims, *args, **kwargs):
         return nn.AvgPool3d(*args, **kwargs)
     raise ValueError(f"unsupported dimensions: {dims}")
 
-def update_ema(target_params, source_params, rate=0.99):
-    """
-    Update target parameters to be closer to those of 
-    source parameters using an exponential moving average.
+# def update_ema(target_params, source_params, rate=0.99):
+#     """
+#     Update target parameters to be closer to those of 
+#     source parameters using an exponential moving average.
 
-    :param target_params: the target parameter sequence.
-    :param source_params: the source parameter sequence.
-    :param rate: the EMA rate (closer to 1 means slower).
-    """
-    for targ, src in zip(target_params, source_params):
-        targ.detach().mul_(rate).add_(src, alpha = 1 - rate)
+#     :param target_params: the target parameter sequence.
+#     :param source_params: the source parameter sequence.
+#     :param rate: the EMA rate (closer to 1 means slower).
+#     """
+#     for targ, src in zip(target_params, source_params):
+#         targ.detach().mul_(rate).add_(src, alpha = 1 - rate)
 
 def zero_module(module):
     """
@@ -90,44 +91,44 @@ def normalization(channels):
     """
     return GroupNorm32(32, channels)
 
-def timestep_embedding(timesteps, dim, max_period=10000):
-    """
-    Create sinusoidal timestep embeddings.
+# def timestep_embedding(timesteps, dim, max_period=10000):
+#     """
+#     Create sinusoidal timestep embeddings.
 
-    :param timesteps: a 1-D Tensor of N indices, one per batch element.
-                      These may be fractional.
-    :param dim: the dimension of the output.
-    :param max_period: controls the minimum frequency of the embeddings.
-    :return: an [N x dim] Tensor of positional embeddings.
-    """
-    half = dim // 2
-    freqs = th.exp(
-        -math.log(max_period) * th.arange(start=0, end=half, dtype=th.float32) / half
-    ).to(device = timesteps.device)
+#     :param timesteps: a 1-D Tensor of N indices, one per batch element.
+#                       These may be fractional.
+#     :param dim: the dimension of the output.
+#     :param max_period: controls the minimum frequency of the embeddings.
+#     :return: an [N x dim] Tensor of positional embeddings.
+#     """
+#     half = dim // 2
+#     freqs = th.exp(
+#         -math.log(max_period) * th.arange(start=0, end=half, dtype=th.float32) / half
+#     ).to(device = timesteps.device)
     
-    args = timesteps[:, None].float() * freqs[None]
-    embedding = th.cat([th.cos(args), th.sin(args)], dim=-1)
+#     args = timesteps[:, None].float() * freqs[None]
+#     embedding = th.cat([th.cos(args), th.sin(args)], dim=-1)
     
-    if dim % 2:
-        embedding = th.cat(
-            [embedding, th.zeros_like(embedding[:, :1])], 
-            dim = -1
-        )
+#     if dim % 2:
+#         embedding = th.cat(
+#             [embedding, th.zeros_like(embedding[:, :1])], 
+#             dim = -1
+#         )
     
-    return embedding
+#     return embedding
 
-class MPFourier(nn.Module):
-    def __init__(self, num_channels, bandwidth=1):
-        super().__init__()
-        self.register_buffer('freqs', 2 * np.pi * th.randn(num_channels) * bandwidth)
-        self.register_buffer('phases', 2 * np.pi * th.rand(num_channels))
+# class MPFourier(nn.Module):
+#     def __init__(self, num_channels, bandwidth=1):
+#         super().__init__()
+#         self.register_buffer('freqs', 2 * np.pi * th.randn(num_channels) * bandwidth)
+#         self.register_buffer('phases', 2 * np.pi * th.rand(num_channels))
 
-    def forward(self, x):
-        y = x.to(th.float32)
-        y = y.ger(self.freqs.to(th.float32))
-        y = y + self.phases.to(th.float32)
-        y = y.cos() * np.sqrt(2)
-        return y.to(x.dtype)
+#     def forward(self, x):
+#         y = x.to(th.float32)
+#         y = y.ger(self.freqs.to(th.float32))
+#         y = y + self.phases.to(th.float32)
+#         y = y.cos() * np.sqrt(2)
+#         return y.to(x.dtype)
 
 def checkpoint(func, inputs, params, flag):
     """
@@ -596,6 +597,29 @@ class QKVAttention(nn.Module):
     def count_flops(model, _x, y):
         return count_flops_attn(model, _x, y)
 
+class FourierEmbed(nn.Module):
+    def __init__(
+            self,
+            in_dim,
+            embed_dim, 
+            use_mp_fourier = True
+        ):
+        super().__init__()
+        self.in_dim = in_dim
+        self.embed_dim = embed_dim
+        self.use_mp_fourier = use_mp_fourier
+        self.embed_layer = nn.Sequential(
+            nn.Linear(self.in_dim, 2 * self.embed_dim),
+            nn.SiLU(),
+            nn.Linear(self.embed_dim * 2, self.embed_dim),
+        )
+        self.MPFourier_cond = MPFourier(self.embed_dim)
+
+    def forward(self, x):
+        if self.use_mp_fourier:
+            return self.embed_layer(self.MPFourier_cond(x))
+        else: 
+            return self.embed_layer(x)
 
 class UNetModel(nn.Module):
     """
@@ -634,20 +658,21 @@ class UNetModel(nn.Module):
             out_channels,
             num_res_blocks,
             attention_resolutions,
-            dropout=0,
-            channel_mult=(1, 2, 4, 8),
-            conv_resample=True,
-            dims=2,
-            use_checkpoint=False,
-            use_fp16=False,
-            num_heads=1,
-            num_head_channels=-1,
-            num_heads_upsample=-1,
-            use_scale_shift_norm=False,
-            resblock_updown=False,
-            use_new_attention_order=False,
-            Reynolds_number = False,
-            num_pred_steps = None,
+            dropout = 0,
+            channel_mult = (1, 2, 4, 8),
+            conv_resample = True,
+            dims = 2,
+            use_checkpoint = False,
+            use_fp16 = False,
+            num_heads = 1,
+            num_head_channels = -1,
+            num_heads_upsample = -1,
+            use_scale_shift_norm = False,
+            resblock_updown = False,
+            use_new_attention_order = False,
+            criterion: nn.Module | None = None 
+            # Reynolds_number = False,
+            # num_pred_steps = None,
         ):
         super().__init__()
 
@@ -655,7 +680,6 @@ class UNetModel(nn.Module):
             num_heads_upsample = num_heads
 
         self.image_size = image_size
-        
         self.in_channels = in_channels
         self.model_channels = model_channels
         self.out_channels = out_channels
@@ -664,33 +688,61 @@ class UNetModel(nn.Module):
         self.dropout = dropout
         self.channel_mult = channel_mult
         self.conv_resample = conv_resample
-        self.Reynolds_number = Reynolds_number
+        # self.Reynolds_number = Reynolds_number
         self.use_checkpoint = use_checkpoint
         self.dtype = th.float16 if use_fp16 else th.float32
         self.num_heads = num_heads
         self.num_head_channels = num_head_channels
         self.num_heads_upsample = num_heads_upsample
-        self.num_pred_steps = num_pred_steps
+        # self.num_pred_steps = num_pred_steps
 
-        time_embed_dim = model_channels * 8
-        self.emb = MPFourier(self.model_channels)
+        self.criterion = criterion
+
+        time_embed_dim = model_channels * 2 # previously was 8
+        # self.emb = MPFourier(self.model_channels)
         
-        self.time_embed = nn.Sequential(
-            linear(model_channels, time_embed_dim),
-            nn.SiLU(),
-            linear(time_embed_dim, time_embed_dim),
+        # self.time_embed = nn.Sequential(
+        #     linear(model_channels, time_embed_dim),
+        #     nn.SiLU(),
+        #     linear(time_embed_dim, time_embed_dim),
+        # )
+            
+        # if self.Reynolds_number is not None:
+        #     self.Reynolds_emb = nn.Sequential(
+        #         linear(model_channels, time_embed_dim),
+        #         nn.SiLU(),
+        #         linear(time_embed_dim, time_embed_dim),
+        #     )           
+            
+        # if self.num_pred_steps is not None:
+        #     self.pred_steps_emb = nn.Embedding(num_pred_steps, time_embed_dim)
+
+        # self.embed_diff_time = FourierEmbed(
+        #     self.time_embed_dim, 
+        #     self.time_embed_dim, 
+        #     use_mp_fourier = True
+        # )
+        self.embed_re = FourierEmbed(
+            time_embed_dim, 
+            time_embed_dim, 
+            use_mp_fourier = True
         )
-            
-        if self.Reynolds_number is not None:
-            self.Reynolds_emb = nn.Sequential(
-                linear(model_channels, time_embed_dim),
-                nn.SiLU(),
-                linear(time_embed_dim, time_embed_dim),
-            )           
-            
-        if self.num_pred_steps is not None:
-            self.pred_steps_emb = nn.Embedding(num_pred_steps, time_embed_dim)
-            
+        # self.embed_re = FourierEmbed(
+        #     self.embed_dim, 
+        #     self.embed_dim, 
+        #     use_mp_fourier = True
+        # )
+        self.embed_target_step = FourierEmbed(
+            time_embed_dim, 
+            time_embed_dim,
+            use_mp_fourier = True
+        )
+        self.embed_total_step = FourierEmbed(
+            time_embed_dim, 
+            time_embed_dim, 
+            use_mp_fourier = True
+        )
+
         ch = input_ch = int(channel_mult[0] * model_channels)
         self.input_blocks = nn.ModuleList(
             [
@@ -844,16 +896,18 @@ class UNetModel(nn.Module):
             zero_module(conv_nd(dims, input_ch, out_channels, 3, padding=1)),
         )
 
-
-
     def forward(
             self, 
-            x, 
-            timesteps, 
-            lowres_snapshots=None, 
-            previous_snapshots=None, 
-            s=None, 
-            Re=None
+            target_snapshot: th.Tensor,
+            cond_snapshot_start: th.Tensor,
+            cond_snapshot_end: th.Tensor,
+            fluid_condition = None, 
+            target_interp_step = None,
+            total_interp_steps = None
+            # lowres_snapshots=None, 
+            # previous_snapshots=None, 
+            # s=None, 
+            # Re=None
         ):
         """
         Apply the model to an input batch.
@@ -864,33 +918,46 @@ class UNetModel(nn.Module):
         :return: an [N x C x ...] Tensor of outputs.
         """
 
-        assert (s is not None) == (
-            self.num_pred_steps is not None
-        ), "must specify the number of different prediction steps if and only if the model is time step conditional"
+        # assert (s is not None) == (
+        #     self.num_pred_steps is not None
+        # ), "must specify the number of different prediction steps if and only if the model is time step conditional"
 
-        assert (Re is not None) == (
-            self.Reynolds_number is not None
-        ), "must specify the Reynolds number"
+        # assert (Re is not None) == (
+        #     self.Reynolds_number is not None
+        # ), "must specify the Reynolds number"
 
+        # --- process input snapshots ---
+        x = th.cat([cond_snapshot_start, cond_snapshot_end], dim=1)
+
+        # --- start embedding ---
+        emb = self.embed_target_step(target_interp_step)
+
+        # conditioning reynolds number
+        if fluid_condition is not None:
+            emb += self.embed_re(fluid_condition)
+
+        # conditioning total interpolation steps
+        if total_interp_steps is not None:
+            emb += self.embed_total_step(total_interp_steps)
+
+        # if lowres_snapshots is not None:
+        #     x = th.cat([x, lowres_snapshots], dim=1)
+            
+        # if previous_snapshots is not None: 
+        #     x = th.cat([x, previous_snapshots], dim=1)
+            
+        # if self.Reynolds_number is not None:
+        #     emb = emb + self.Reynolds_emb(
+        #         timestep_embedding(Re, self.model_channels)
+        #     )
+            
+        # if self.num_pred_steps is not None:
+        #     # integrator/forecastor
+        #     assert s.shape == (x.shape[0],)
+        #     emb = emb + self.pred_steps_emb(s)      
+            
+        # --- end embedding ---
         hs = []
-        emb = self.time_embed(self.emb(timesteps))
-
-        if lowres_snapshots is not None:
-            x = th.cat([x, lowres_snapshots], dim=1)
-            
-        if previous_snapshots is not None: 
-            x = th.cat([x, previous_snapshots], dim=1)
-            
-        if self.Reynolds_number is not None:
-            emb = emb + self.Reynolds_emb(
-                timestep_embedding(Re, self.model_channels)
-            )
-            
-        if self.num_pred_steps is not None:
-            # integrator/forecastor
-            assert s.shape == (x.shape[0],)
-            emb = emb + self.pred_steps_emb(s)      
-            
         h = x.type(self.dtype)
         for module in self.input_blocks:
             h = module(h, emb)
@@ -902,18 +969,61 @@ class UNetModel(nn.Module):
             h = th.cat([h, hs.pop()], dim=1)
             h = module(h, emb)
         h = h.type(x.dtype)
+
+        # return self.out(h)
+        return self.criterion(self.out(h), target_snapshot)
+
+    def sample(
+            self, 
+            cond_snapshot_start: th.Tensor,
+            cond_snapshot_end: th.Tensor,
+            fluid_condition = None, 
+            target_interp_step = None,
+            total_interp_steps = None
+        ):
+
+        # --- process input snapshots ---
+        x = th.cat([cond_snapshot_start, cond_snapshot_end], dim=1)
+
+        # --- start embedding ---
+        emb = self.embed_target_step(target_interp_step)
+
+        # conditioning reynolds number
+        if fluid_condition is not None:
+            emb += self.embed_re(fluid_condition)
+
+        # conditioning total interpolation steps
+        if total_interp_steps is not None:
+            emb += self.embed_total_step(total_interp_steps)   
+            
+        # --- end embedding ---
+        hs = []
+        h = x.type(self.dtype)
+        for module in self.input_blocks:
+            h = module(h, emb)
+            hs.append(h)
+            
+        h = self.middle_block(h, emb)
+        
+        for module in self.output_blocks:
+            h = th.cat([h, hs.pop()], dim=1)
+            h = module(h, emb)
+        h = h.type(x.dtype)
+
         return self.out(h)
 
 def UNet(
         image_size,
-        in_channels = 3,
+        in_channels = 2,
         out_channels = 1,
         base_width = 128,
-        Reynolds_number = False,
-        num_pred_steps = None,
+        # Reynolds_number = False,
+        # num_pred_steps = None,
     ):
-
-    if image_size == 256:
+    if image_size == 128:
+        channel_mult = (1, 2, 4, 8)
+        
+    elif image_size == 256:
         channel_mult = (1, 2, 4, 8)
         #channel_mult =  (1, 1, 2, 2, 4, 4)
 
@@ -933,22 +1043,23 @@ def UNet(
         attention_ds.append(image_size // int(res))
 
     return UNetModel(
-        image_size=image_size,
-        in_channels=in_channels,
-        model_channels=base_width,
-        out_channels=out_channels,
-        num_res_blocks=2,
-        attention_resolutions=tuple(attention_ds),
-        dropout=0.15,
-        channel_mult=channel_mult,
-        use_checkpoint=False,
-        use_fp16=False,
-        num_heads=8,
-        num_head_channels=64,
-        num_heads_upsample=-1,
-        use_scale_shift_norm=True,
-        resblock_updown=True,
-        use_new_attention_order=True,
-        Reynolds_number=Reynolds_number,
-        num_pred_steps=num_pred_steps,
+        image_size = image_size,
+        in_channels = in_channels,
+        model_channels = base_width,
+        out_channels = out_channels,
+        num_res_blocks = 2,
+        attention_resolutions = tuple(attention_ds),
+        dropout = 0.15,
+        channel_mult = channel_mult,
+        use_checkpoint = False,
+        use_fp16 = False,
+        num_heads = 8,
+        num_head_channels = 64,
+        num_heads_upsample = -1,
+        use_scale_shift_norm = True,
+        resblock_updown = True,
+        use_new_attention_order = True,
+        criterion = th.nn.L1Loss() # maybe l2?
+        # Reynolds_number=Reynolds_number,
+        # num_pred_steps=num_pred_steps,
     )
