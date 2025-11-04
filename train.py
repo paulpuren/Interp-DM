@@ -16,10 +16,14 @@ from src.flex import FLEX
 from src.diffusion_model import DiffusionModel
 from datasets.get_data import NSKT as NSKT
 from datasets.data_shanghai import Shanghai
+from datasets.data_sea_temp import InputHandle
 from src.plotting import plot_samples
 
 import warnings
 warnings.filterwarnings("ignore")
+
+# import wandb.errors
+# print(dir(wandb.errors))
 
 def ddp_setup(local_rank, world_size):
     """
@@ -89,8 +93,8 @@ class Trainer:
             total_interp_steps
         ):
         self.optimizer.zero_grad()
-        if isinstance(self.model.module, DiffusionModel):
-            reynolds_number = reynolds_number.unsqueeze(-1)
+        # if isinstance(self.model.module, DiffusionModel):
+        #     reynolds_number = reynolds_number.unsqueeze(-1)
         
         loss = self.model(
             targets, 
@@ -167,8 +171,8 @@ class Trainer:
                 total_interp_steps = total_interp_steps.to(self.local_gpu_id)
                 # print(f'Type {type(target_interp_step)}')
 
-                if isinstance(self.model.module, DiffusionModel):
-                    reynolds_number = reynolds_number.unsqueeze(-1)
+                # if isinstance(self.model.module, DiffusionModel):
+                #     reynolds_number = reynolds_number.unsqueeze(-1)
                 
                 samples = self.model.module.sample(
                     targets.shape[0],
@@ -271,22 +275,36 @@ def load_train_objs(args):
             data_path = args.scratch_dir,
             img_size = args.patch_size, 
             type = "train",
-            trans = None
+            trans = None,
+            total_interp_steps = args.total_interp_steps
         )
+    elif args.data_name == "sea_temp":
+        input_param = {
+            'path': args.scratch_dir,
+            'total_length': args.total_interp_steps, # total length of each sample (input + output)
+            'input_length': 2, # length of input sequence
+            'type': 'train', # train/test/valid
+            'input_data_type': 'float32'
+        }
+        train_set = InputHandle(input_param)
+    else:
+        print("This dataset is not supported.")
+        sys.exit()
 
     ema = None # placeholder for non-FLEX model
     if args.model == 'FLEX':
-        encoder, task_encoder, decoder = FLEX(
+        encoder, task_encoder, task_encoder_end, decoder = FLEX(
             image_size = args.patch_size, 
             in_channels = 1, 
             out_channels = 1,
-            model_size= 'medium', # was "small"
-            mlp_ratio = 2
+            model_size= "small", # was "small", "medium"
+            mlp_ratio = 2 # or maybe 4
         )
         model = DiffusionModel(
             encoder = encoder.cuda(),
             decoder = decoder.cuda(),
             task_encoder = task_encoder.cuda(),
+            task_encoder_end = task_encoder_end.cuda(),
             diff_steps = args.time_steps,
             prediction_type = args.prediction_type,
             criterion = torch.nn.L1Loss() # maybe l2?
@@ -296,19 +314,30 @@ def load_train_objs(args):
             model.parameters(), 
             decay = 0.999
         )
-        if args.optimizer == 'adam':
-            optimizer = torch.optim.Adam(
-                model.parameters(), 
-                lr = args.learning_rate
-            )
-        elif args.optimizer == 'lion':
-            optimizer = Lion(
-                model.parameters(), 
-                lr = args.learning_rate
-            )
-        else:
-            print("Only Adam and Lion are supported.")
-            sys.exit()
+    elif args.model == 'UNet':
+        model = UNet(
+            image_size = args.patch_size, 
+            in_channels = 2, # start and end frames
+            out_channels = 1, # predict interpolated frame
+            base_width = args.base_width
+        )
+    else:
+        print("This model is not supported.")
+        sys.exit()
+
+    if args.optimizer == 'adam':
+        optimizer = torch.optim.Adam(
+            model.parameters(), 
+            lr = args.learning_rate
+        )
+    elif args.optimizer == 'lion':
+        optimizer = Lion(
+            model.parameters(), 
+            lr = args.learning_rate
+        )
+    else:
+        print("Only Adam and Lion are supported.")
+        sys.exit()
     return train_set, model, optimizer, ema
 
 def prepare_dataloader(dataset: Dataset, batch_size: int):
@@ -316,11 +345,12 @@ def prepare_dataloader(dataset: Dataset, batch_size: int):
         dataset,
         batch_size = batch_size,
         pin_memory = True,
-        shuffle = False,
         sampler = DistributedSampler(dataset),
+        shuffle = False,
         num_workers = 8,
         drop_last = True
     )
+
 
 def main(
         rank: int, 
@@ -496,7 +526,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--base_width", 
         type = int, 
-        default = 64, 
+        default = 128, 
         help = "Basewidth of U-Net"
     )    
     args = parser.parse_args()
@@ -506,7 +536,7 @@ if __name__ == "__main__":
     
     # wandb.login()
     wandb.login(key = "5282eaefee2cb8f881265effb6251abf1703deee")
-    args.run_name = "Model_{}_Data_{}_Optim_{}_lr{}_epoch{}_stride{}_T{}_Tfixed{}".format(
+    args.run_name = "Model2s_interp_skip0.1_{}_Data_{}_Optim_{}_lr{}_epoch{}_stride{}_T{}_Tfixed{}".format(
             args.model,
             args.data_name,
             args.optimizer,
