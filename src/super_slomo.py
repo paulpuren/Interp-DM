@@ -295,7 +295,12 @@ class backWarp(nn.Module):
 # Creating an array of `t` values for the 7 intermediate frames between
 # reference frames I0 and I1. 
 # TODO: need to be changed if number of intermediate frames is changed.
-t = np.linspace(0.125, 0.875, 7)
+# t = np.linspace(0.125, 0.875, 7)
+
+# NSKT
+# num_snapshots = 10, dt = 5e-4
+T = 11
+t = np.linspace(0.0, (5e-4) * T, T)
 
 def getFlowCoeff (indices, device):
     """
@@ -327,7 +332,8 @@ def getFlowCoeff (indices, device):
 
 
     # Convert indices tensor to numpy array
-    ind = indices.detach().numpy()
+    # ind = indices.detach().numpy()
+    ind = indices.cpu().detach().numpy().astype(int)
     C11 = C00 = - (1 - (t[ind])) * (t[ind])
     C01 = (t[ind]) * (t[ind])
     C10 = (1 - (t[ind])) * (1 - (t[ind]))
@@ -363,7 +369,8 @@ def getWarpCoeff (indices, device):
 
 
     # Convert indices tensor to numpy array
-    ind = indices.detach().numpy()
+    # ind = indices.detach().numpy()
+    ind = indices.cpu().detach().numpy().astype(int)
     C0 = 1 - t[ind]
     C1 = t[ind]
     return torch.Tensor(C0)[None, None, None, :].permute(3, 0, 1, 2).to(device), torch.Tensor(C1)[None, None, None, :].permute(3, 0, 1, 2).to(device)
