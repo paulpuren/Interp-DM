@@ -15,7 +15,8 @@ from src.lion import Lion
 from diffusers.optimization import get_linear_schedule_with_warmup as scheduler
 from src.unet import UNet
 from src.flex import FLEX
-import src.super_slomo as model
+# import src.super_slomo as model
+import src.super_slomo as slomo_model
 
 from src.diffusion_model import DiffusionModel
 from datasets.get_data import NSKT as NSKT
@@ -74,7 +75,7 @@ class Trainer:
             run: wandb,
             run_name: str
         ) -> None:
-        
+
         self.gpu_id = gpu_id
         self.local_gpu_id = local_gpu_id
         # self.model = model.to(local_gpu_id)
@@ -92,12 +93,12 @@ class Trainer:
         self.flowComp = DDP(
             flowComp, 
             device_ids = [local_gpu_id], 
-            find_unused_parameters = True
+            find_unused_parameters = False
         )
         self.ArbTimeFlowIntrp = DDP(
             ArbTimeFlowIntrp, 
             device_ids = [local_gpu_id], 
-            find_unused_parameters = True
+            find_unused_parameters = False
         )
 
         self.run = run
@@ -154,9 +155,11 @@ class Trainer:
 
             # unpack the condition parameters
             target_interp_step, total_interp_steps, reynolds_number = cond_params
-            reynolds_number = reynolds_number.to(self.local_gpu_id)
+            #reynolds_number = reynolds_number.to(self.local_gpu_id)
             target_interp_step = target_interp_step.to(self.local_gpu_id)
-            total_interp_steps = total_interp_steps.to(self.local_gpu_id)
+            #total_interp_steps = total_interp_steps.to(self.local_gpu_id)
+
+            trainFrameIndex = target_interp_step
 
             self.optimizer.zero_grad()
             
@@ -171,7 +174,7 @@ class Trainer:
             F_0_1 = flowOut[:,:2,:,:] # c = 2
             F_1_0 = flowOut[:,2:,:,:] # c = 2
 
-            fCoeff = model.getFlowCoeff(trainFrameIndex, self.local_gpu_id)
+            fCoeff = slomo_model.getFlowCoeff(trainFrameIndex, self.local_gpu_id)
             
             # Calculate intermediate flows
             # c = 2
@@ -212,7 +215,7 @@ class Trainer:
             g_I0_F_t_0_f = self.trainFlowBackWarp(I0, F_t_0_f)
             g_I1_F_t_1_f = self.trainFlowBackWarp(I1, F_t_1_f)
         
-            wCoeff = model.getWarpCoeff(trainFrameIndex, self.local_gpu_id)
+            wCoeff = slomo_model.getWarpCoeff(trainFrameIndex, self.local_gpu_id)
         
             # Calculate final intermediate frame 
             Ft_p = (wCoeff[0] * V_t_0 * g_I0_F_t_0_f + wCoeff[1] * V_t_1 * g_I1_F_t_1_f) / (wCoeff[0] * V_t_0 + wCoeff[1] * V_t_1)
@@ -220,7 +223,7 @@ class Trainer:
             # Loss
             recnLoss = L1_lossFn(Ft_p, IFrame)
             # prcpLoss = MSE_LossFn(vgg16_conv_4_3(Ft_p), vgg16_conv_4_3(IFrame))
-            warpLoss = L1_lossFn(g_I0_F_t_0, IFrame) + L1_lossFn(g_I1_F_t_1, IFrame) + L1_lossFn(trainFlowBackWarp(I0, F_1_0), I1) + L1_lossFn(trainFlowBackWarp(I1, F_0_1), I0)
+            warpLoss = L1_lossFn(g_I0_F_t_0, IFrame) + L1_lossFn(g_I1_F_t_1, IFrame) + L1_lossFn(self.trainFlowBackWarp(I0, F_1_0), I1) + L1_lossFn(self.trainFlowBackWarp(I1, F_0_1), I0)
         
             loss_smooth_1_0 = torch.mean(torch.abs(F_1_0[:, :, :, :-1] - F_1_0[:, :, :, 1:])) + torch.mean(torch.abs(F_1_0[:, :, :-1, :] - F_1_0[:, :, 1:, :]))
             loss_smooth_0_1 = torch.mean(torch.abs(F_0_1[:, :, :, :-1] - F_0_1[:, :, :, 1:])) + torch.mean(torch.abs(F_0_1[:, :, :-1, :] - F_0_1[:, :, 1:, :]))
@@ -242,8 +245,9 @@ class Trainer:
             #     target_interp_step,
             #     total_interp_steps
             # )
-            loss_values_task.append(loss_task)
             loss_task.backward()
+            loss_values_task.append(loss_task.item())#loss.item()
+            
             # if isinstance(self.model.module, DiffusionModel):
             #     torch.nn.utils.clip_grad_norm_(self.model.module.parameters(), 1.)
             self.optimizer.step()
@@ -265,33 +269,112 @@ class Trainer:
         os.makedirs(sample_path, exist_ok = True)
 
         # with self.model.module.ema.average_parameters():
-        self.model.eval()
+        # self.model.eval()
+        self.flowComp.eval()
+        self.ArbTimeFlowIntrp.eval()
+
         with torch.no_grad():
             self.train_loader.sampler.set_epoch(1)
 
             # unpack the data
             inputs, targets, cond_params = next(iter(self.train_loader))
-            condition_start, condition_end = inputs
-            condition_start = condition_start.to(self.local_gpu_id)
-            condition_end = condition_end.to(self.local_gpu_id)
+            # condition_start, condition_end = inputs
+            # condition_start = condition_start.to(self.local_gpu_id)
+            # condition_end = condition_end.to(self.local_gpu_id)
             
+            # # unpack the condition parameters
+            # target_interp_step, total_interp_steps, reynolds_number = cond_params
+            # reynolds_number = reynolds_number.to(self.local_gpu_id)
+            # target_interp_step = target_interp_step.to(self.local_gpu_id)
+            # total_interp_steps = total_interp_steps.to(self.local_gpu_id)
+            # # print(f'Type {type(target_interp_step)}')
+
+            # # if isinstance(self.model.module, DiffusionModel):
+            # #     reynolds_number = reynolds_number.unsqueeze(-1)
+            
+            # samples = self.model.module.sample(
+            #     condition_start,
+            #     condition_end,
+            #     reynolds_number,
+            #     target_interp_step,
+            #     total_interp_steps
+            # )
+
+            I0, I1 = inputs
+            I0 = I0.to(self.local_gpu_id)
+            I1 = I1.to(self.local_gpu_id)
+            IFrame = targets.to(self.local_gpu_id)
+
             # unpack the condition parameters
             target_interp_step, total_interp_steps, reynolds_number = cond_params
-            reynolds_number = reynolds_number.to(self.local_gpu_id)
+            #reynolds_number = reynolds_number.to(self.local_gpu_id)
             target_interp_step = target_interp_step.to(self.local_gpu_id)
-            total_interp_steps = total_interp_steps.to(self.local_gpu_id)
-            # print(f'Type {type(target_interp_step)}')
+            #total_interp_steps = total_interp_steps.to(self.local_gpu_id)
 
-            # if isinstance(self.model.module, DiffusionModel):
-            #     reynolds_number = reynolds_number.unsqueeze(-1)
+            trainFrameIndex = target_interp_step
             
-            samples = self.model.module.sample(
-                condition_start,
-                condition_end,
-                reynolds_number,
-                target_interp_step,
-                total_interp_steps
+            # --- START Super Slomo ---
+            # Calculate flow between reference frames I0 and I1
+            # c: 2 -> 4 (was 6 -> 4)
+            flowOut = self.flowComp(
+                torch.cat((I0, I1), dim=1)
             )
+
+            # Extracting flows between I0 and I1 - F_0_1 and F_1_0
+            F_0_1 = flowOut[:,:2,:,:] # c = 2
+            F_1_0 = flowOut[:,2:,:,:] # c = 2
+
+            fCoeff = slomo_model.getFlowCoeff(trainFrameIndex, self.local_gpu_id)
+            
+            # Calculate intermediate flows
+            # c = 2
+            F_t_0 = fCoeff[0] * F_0_1 + fCoeff[1] * F_1_0
+            F_t_1 = fCoeff[2] * F_0_1 + fCoeff[3] * F_1_0
+
+            # Get intermediate frames from the intermediate flows
+            # c: (img + flow) -> img, (1 + 2) -> 1 (was (3 + 2) -> 3)
+            g_I0_F_t_0 = self.trainFlowBackWarp(I0, F_t_0)
+            g_I1_F_t_1 = self.trainFlowBackWarp(I1, F_t_1)
+
+            # Calculate optical flow residuals and visibility maps
+            # 2 flows + 1 visibility = (2*2 + 1) channels
+            # c: 12 -> 5 (was 20 -> 5)
+            intrpOut = self.ArbTimeFlowIntrp(
+                torch.cat(
+                    (
+                        I0, 
+                        I1, 
+                        F_0_1, 
+                        F_1_0, 
+                        F_t_1, 
+                        F_t_0, 
+                        g_I1_F_t_1, 
+                        g_I0_F_t_0
+                    ), 
+                    dim = 1
+                )
+            )
+
+            # Extract optical flow residuals and visibility maps
+            F_t_0_f = intrpOut[:, :2, :, :] + F_t_0
+            F_t_1_f = intrpOut[:, 2:4, :, :] + F_t_1
+            V_t_0   = F.sigmoid(intrpOut[:, 4:5, :, :])
+            V_t_1   = 1 - V_t_0
+        
+            # Get intermediate frames from the intermediate flows
+            g_I0_F_t_0_f = self.trainFlowBackWarp(I0, F_t_0_f)
+            g_I1_F_t_1_f = self.trainFlowBackWarp(I1, F_t_1_f)
+        
+            wCoeff = slomo_model.getWarpCoeff(trainFrameIndex, self.local_gpu_id)
+        
+            # Calculate final intermediate frame 
+            Ft_p = (wCoeff[0] * V_t_0 * g_I0_F_t_0_f + wCoeff[1] * V_t_1 * g_I1_F_t_1_f) / (wCoeff[0] * V_t_0 + wCoeff[1] * V_t_1)
+        
+            # define the parameters
+            samples = Ft_p
+            condition_start = I0
+            targets = IFrame
+
         plot_samples(samples, condition_start, targets, sample_path, epoch)
         print(f"Epoch {epoch} | Generated samples saved at {sample_path}")
 
@@ -304,7 +387,9 @@ class Trainer:
             self.run_name
         )
         save_dict = {
-            'model': self.model.module.state_dict(),
+            # 'model': self.model.module.state_dict(),
+            'flowComp': self.flowComp.module.state_dict(),
+            'ArbTimeFlowIntrp': self.ArbTimeFlowIntrp.module.state_dict(),
             # 'ema': self.model.module.ema.state_dict(),
             'optimizer': self.optimizer.state_dict()
         }
@@ -327,7 +412,10 @@ class Trainer:
         )
         best_mse = np.inf
 
-        self.model.train()
+        # self.model.train()
+        self.flowComp.train()
+        self.ArbTimeFlowIntrp.train()
+
         for epoch in range(max_epochs):
             loss_values = self._run_epoch(
                 epoch,
@@ -438,20 +526,21 @@ def load_train_objs(args, device):
         # Initialize flow computation and arbitrary-time flow interpolation CNNs
         # original is (6, 4) 6 = 3 * 2 due to RGB input
         # for my case, 1 * 2 = 2 due to grayscale input
-        flowComp = model.UNet(2, 4) 
+        flowComp = slomo_model.UNet(2, 4) 
         # flowComp.to(device) to device in main training loop
 
         # orginally (20, 5) due to RGB input
-        # for my case, (1+2) * 4 = 12, 1 + 2 = 3
-        ArbTimeFlowIntrp = model.UNet(12, 3) 
+        # for my case, (1+2) * 4 = 12, 2 + 2 + 1 = 5
+        ArbTimeFlowIntrp = slomo_model.UNet(12, 5) 
         # ArbTimeFlowIntrp.to(device)
 
         # Initialze backward warpers for train and validation datasets
-        trainFlowBackWarp = model.backWarp(
+        trainFlowBackWarp = slomo_model.backWarp(
             args.patch_size, 
             args.patch_size, 
             device
         )
+        params = list(ArbTimeFlowIntrp.parameters()) + list(flowComp.parameters())
         # trainFlowBackWarp      = trainFlowBackWarp.to(device)
         # validationFlowBackWarp = model.backWarp(640, 352, device)
         # validationFlowBackWarp = validationFlowBackWarp.to(device)
@@ -460,13 +549,21 @@ def load_train_objs(args, device):
         sys.exit()
 
     if args.optimizer == 'adam':
+        # optimizer = torch.optim.Adam(
+        #     model.parameters(), 
+        #     lr = args.learning_rate
+        # )
         optimizer = torch.optim.Adam(
-            model.parameters(), 
+            params, 
             lr = args.learning_rate
         )
     elif args.optimizer == 'lion':
+        # optimizer = Lion(
+        #     model.parameters(), 
+        #     lr = args.learning_rate
+        # )
         optimizer = Lion(
-            model.parameters(), 
+            params, 
             lr = args.learning_rate
         )
     else:
@@ -539,8 +636,12 @@ def main(
     
     # Model summary
     print("**************")
-    print("Total model params: %.2fM" % (
-            sum(p.numel() for p in model.parameters()) / 1000000.0
+    print("Total model params in the 1st UNet: %.2fM" % (
+            sum(p.numel() for p in flowComp.parameters()) / 1000000.0
+        )
+    )
+    print("Total model params in the 2nd UNet: %.2fM" % (
+            sum(p.numel() for p in ArbTimeFlowIntrp.parameters()) / 1000000.0
         )
     )
     print("**************")
@@ -550,6 +651,7 @@ def main(
     trainer = Trainer(
         flowComp,
         ArbTimeFlowIntrp, 
+        trainFlowBackWarp,
         train_data, 
         optimizer, 
         gpu_id = rank, 
