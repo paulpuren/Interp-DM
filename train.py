@@ -14,7 +14,8 @@ from diffusers.optimization import get_linear_schedule_with_warmup as scheduler
 from src.unet import UNet
 from src.flex import FLEX
 from src.diffusion_model import DiffusionModel
-from datasets.get_data import NSKT as NSKT
+# from datasets.get_data import NSKT as NSKT
+from datasets.data_nskt import NSKT
 from datasets.data_shanghai import Shanghai
 from datasets.data_sea_temp import InputHandle
 from src.plotting import plot_samples
@@ -267,8 +268,10 @@ def load_train_objs(args):
         train_set = NSKT(
             patch_size = args.patch_size, 
             stride = args.stride,
+            num_interp_steps= args.total_interp_steps,
             scratch_dir = args.scratch_dir,
-            train = True,
+            flag = "train",
+            # train = True,
             is_T_fixed = args.is_T_fixed
         )
     elif args.data_name == "shanghai":
