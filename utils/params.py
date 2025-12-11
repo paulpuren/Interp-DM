@@ -46,7 +46,7 @@ def get_args():
         default = 2e-4, 
         type = float, 
         help = 'learning rate'
-    )
+    ) # 1e-4 for adam; 1e-5 for lion
     parser.add_argument(
         "--checkpoint_path", 
         default = "", 
