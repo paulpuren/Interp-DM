@@ -429,7 +429,10 @@ class DiffusionModel(nn.Module):
 
         # 1. random timestep t ∼ 𝕌(0,1) and corresponding schedule coefficients 
         t = torch.rand(refinement.shape[0], device = refinement.device)
-        logsnr, alpha, sigma = get_logsnr_alpha_sigma(t, shift = self.logsnr_shift)
+        logsnr, alpha, sigma = get_logsnr_alpha_sigma(
+            t, 
+            shift = self.logsnr_shift
+        )
 
         # 2. forward diffusion (add Gaussian noise)
         eps = torch.randn_like(refinement, device=refinement.device) # ε ∼ 𝒩(0, I)
