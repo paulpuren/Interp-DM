@@ -9,6 +9,7 @@ import h5py
 import numpy as np
 import os
 import random
+import cv2
 
 # define the Reynolds numbers for train and eval
 RE_TRAIN_LIST = [2000, 4000, 8000, 16000, 32000]
@@ -57,7 +58,7 @@ class NSKT(Dataset):
 
         # different seeds for simulated train and eval data
         self.seed = '2150' if self.flag == "train" else '3407'
-        self.path = self.build_file_list()
+        self.paths = self.build_file_list()
         
         # Load initial dataset shape for determining patch boundaries
         with h5py.File(self.paths[0], 'r') as f:
@@ -66,12 +67,12 @@ class NSKT(Dataset):
         self.max_col = (self.data_shape[2] - self.patch_size) // self.stride + 1 
 
     def build_file_list(self):
-        re_list = RE_TRAIN_LIST if self.flag == "train" else RE_EVAL_LIST
+        self.re_list = RE_TRAIN_LIST if self.flag == "train" else RE_EVAL_LIST
         return [
             os.path.join(
                 self.scratch_dir,
                 f"{re}_2048_2048_seed_{self.seed}.h5"
-            ) for re in re_list
+            ) for re in self.re_list
         ]
     
     def open_hdf5(self):
@@ -88,13 +89,14 @@ class NSKT(Dataset):
             self.open_hdf5()
    
         # Randomly select a dataset and Reynolds number
-        #dataset_id = np.random.randint(len(self.datasets))
-        dataset_id = 3 #use just Re=16k
+        dataset_id = np.random.randint(len(self.datasets))
+        # dataset_id = 3 # previously using fixed Re=16k
         
         # specific embedding for different reynolds numbers
-        # kind of normalization on reynolds number
-        reynolds_number = self.RE_list[dataset_id] ** (1/4) / 14 
-        reynolds_number = reynolds_number if np.random.uniform() < 0.9 else 0. 
+        # # kind of normalization on reynolds number
+        # reynolds_number = self.RE_list[dataset_id] ** (1/4) / 14 
+        # reynolds_number = reynolds_number if np.random.uniform() < 0.9 else 0. 
+        reynolds_number = self.re_list[dataset_id] / 40000.0 # from Vini
 
         # Randomly choose between datasets for variation
         dataset = self.datasets[dataset_id]
@@ -108,45 +110,83 @@ class NSKT(Dataset):
 
         # define a random total pred steps
         if self.is_T_fixed:
-            total_interp_steps = 10
+            total_interp_steps = self.num_interp_steps
         else:
-            total_interp_steps = np.random.randint(5, 20)
+            total_interp_steps = np.random.randint(
+                int(self.num_interp_steps // 4), 
+                self.num_interp_steps
+            ) # was random(5, 20)
 
         # define a random time index for the target within the range of predicted steps
         target_interp_step = np.random.randint(0, total_interp_steps) + 1
         
         # extract the input patch
-        condition_start = torch.from_numpy(
-            dataset[
-                time_index, 
-                row_start : (row_start + self.patch_size), 
-                col_start : (col_start + self.patch_size)
-            ]
-        ).float().unsqueeze(0)
-        condition_end = torch.from_numpy(
-            dataset[
-                (time_index + total_interp_steps + 1), 
-                row_start : (row_start + self.patch_size), 
-                col_start : (col_start + self.patch_size)
-            ]
-        ).float().unsqueeze(0)
+        # condition_start = torch.from_numpy(
+        #     dataset[
+        #         time_index, 
+        #         row_start : (row_start + self.patch_size), 
+        #         col_start : (col_start + self.patch_size)
+        #     ]
+        # ).float().unsqueeze(0)
+        # condition_end = torch.from_numpy(
+        #     dataset[
+        #         (time_index + total_interp_steps + 1), 
+        #         row_start : (row_start + self.patch_size), 
+        #         col_start : (col_start + self.patch_size)
+        #     ]
+        # ).float().unsqueeze(0)
+
+        # resize
+        # start condition
+        select_region = self.patch_size * 2
+        condition_start = dataset[
+            time_index, 
+            row_start : (row_start + select_region), 
+            col_start : (col_start + select_region)
+        ]
+        condition_start = cv2.resize(
+            condition_start, 
+            (self.patch_size, self.patch_size)
+        )
+        condition_start = torch.from_numpy(condition_start).float().unsqueeze(0)
+
+        # end condition
+        condition_end = dataset[
+            (time_index + total_interp_steps + 1), 
+            row_start : (row_start + select_region), 
+            col_start : (col_start + select_region)
+        ]
+        condition_end = cv2.resize(
+            condition_end, 
+            (self.patch_size, self.patch_size)
+        )       
+        condition_end = torch.from_numpy(condition_end).float().unsqueeze(0)
         inputs = [condition_start, condition_end]
         
         # extract the target patch
-        targets = torch.from_numpy(
-            dataset[
-                (time_index + target_interp_step), 
-                row_start : (row_start + self.patch_size), 
-                col_start : (col_start + self.patch_size)
-            ]
-        ).float().unsqueeze(0)
+        # targets = torch.from_numpy(
+        #     dataset[
+        #         (time_index + target_interp_step), 
+        #         row_start : (row_start + self.patch_size), 
+        #         col_start : (col_start + self.patch_size)
+        #     ]
+        # ).float().unsqueeze(0)
+        targets = dataset[
+            (time_index + target_interp_step), 
+            row_start : (row_start + select_region), 
+            col_start : (col_start + select_region)
+        ]
+        targets = cv2.resize(
+            targets, 
+            (self.patch_size, self.patch_size)
+        )       
+        targets = torch.from_numpy(targets).float().unsqueeze(0)
 
         cond_params = [
             torch.tensor(target_interp_step, dtype=torch.float32), 
             torch.tensor(total_interp_steps, dtype=torch.float32),
             torch.tensor(reynolds_number, dtype=torch.float32)
         ]
-        
         return inputs, targets, cond_params
 
     def __len__(self):
