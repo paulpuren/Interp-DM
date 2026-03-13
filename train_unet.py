@@ -2,27 +2,20 @@ import os, sys, time
 import numpy as np
 import wandb
 import torch
-from torch_ema import ExponentialMovingAverage
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 import torch.multiprocessing as mp
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
-# from torch.distributed import init_process_group, destroy_process_group
-from torch.distributed import init_process_group, destroy_process_group, barrier, get_rank, is_initialized, all_reduce, get_world_size
-from src.lion import Lion
+from torch.distributed import init_process_group, destroy_process_group, get_rank
 from diffusers.optimization import get_linear_schedule_with_warmup as scheduler
-from src.unet import UNet
-from src.flex import FLEX
 from src.diffusion_model import DiffusionModel
-from datasets.get_data import NSKT as NSKT
-from datasets.data_shanghai import Shanghai
 from src.plotting import plot_samples
+from utils.params import get_args
+from utilities import *
 
 import warnings
 warnings.filterwarnings("ignore")
 
-# import wandb.errors
-# print(dir(wandb.errors))
 
 def ddp_setup(local_rank, world_size):
     """
@@ -60,6 +53,7 @@ class Trainer:
             self,
             model: torch.nn.Module,
             train_loader: DataLoader,
+            val_loader: DataLoader,
             optimizer: torch.optim.Optimizer,
             gpu_id: int,
             local_gpu_id: int,
@@ -72,6 +66,7 @@ class Trainer:
         self.local_gpu_id = local_gpu_id
         self.model = model.to(local_gpu_id)
         self.train_loader = train_loader
+        self.val_loader = val_loader
         self.optimizer = optimizer
         self.sampling_freq = sampling_freq
         self.model = DDP(
@@ -92,9 +87,7 @@ class Trainer:
             total_interp_steps
         ):
         self.optimizer.zero_grad()
-        # if isinstance(self.model.module, DiffusionModel):
-        #     reynolds_number = reynolds_number.unsqueeze(-1)
-        
+
         loss = self.model(
             targets, 
             condition_start, 
@@ -109,7 +102,6 @@ class Trainer:
             torch.nn.utils.clip_grad_norm_(self.model.module.parameters(), 1.)
         self.optimizer.step()
         self.lr_scheduler.step()
-        # self.model.module.ema.update()
         return loss.item()
 
     def _run_epoch(self, epoch):        
@@ -141,6 +133,42 @@ class Trainer:
         self.run.log({"Task loss": np.mean(loss_values_task)})
         # self.run.log({"Contrastive loss": 0})  
         return loss_values_task
+
+    def val_epoch(self, epoch):        
+        self.val_loader.sampler.set_epoch(epoch)
+        loss_values_task = []
+        
+        with self.model.module.ema.average_parameters():
+            with torch.no_grad():
+                self.model.eval()
+
+            for inputs, targets, cond_params in self.val_loader:
+                # Unpack the input tuple
+                condition_start, condition_end = inputs
+                condition_start = condition_start.to(self.local_gpu_id)
+                condition_end = condition_end.to(self.local_gpu_id)
+                targets = targets.to(self.local_gpu_id)
+                
+                # Unpack the condition parameters
+                target_interp_step, total_interp_steps, reynolds_number = cond_params
+                reynolds_number = reynolds_number.to(self.local_gpu_id)
+                target_interp_step = target_interp_step.to(self.local_gpu_id)
+                total_interp_steps = total_interp_steps.to(self.local_gpu_id)
+
+                # predict
+                val_loss = self.model(
+                    targets, 
+                    condition_start, 
+                    condition_end, 
+                    reynolds_number, 
+                    target_interp_step,
+                    total_interp_steps
+                )
+                loss_values_task.append(val_loss.item())
+        self.run.log({"Val loss": np.mean(loss_values_task)})
+
+        return loss_values_task
+
 
     def _generate_samples(self, epoch):
         sample_dir = "./samples"
@@ -193,7 +221,6 @@ class Trainer:
         )
         save_dict = {
             'model': self.model.module.state_dict(),
-            # 'ema': self.model.module.ema.state_dict(),
             'optimizer': self.optimizer.state_dict()
         }
         torch.save(save_dict, save_path)
@@ -211,23 +238,29 @@ class Trainer:
         best_mse = np.inf
         self.model.train()
         for epoch in range(max_epochs):
-            loss_values = self._run_epoch(epoch)
+            train_loss_values = self._run_epoch(epoch)
+            val_loss_values = train_loss_values
+            # val_loss_values = self.val_epoch(epoch)
 
             if self.local_gpu_id == 0:
-                avg_loss = np.mean(loss_values)
-                print("Epoch {} | loss {:.4f} | learning rate {:.6f}".format(
+                avg_train_loss = np.mean(train_loss_values)
+                avg_val_loss = np.mean(val_loss_values)
+                print("Epoch {} | Train loss {:.4f} | Val loss {:.4f} | learning rate {:.6f}".format(
                     epoch + 1, 
-                    avg_loss, 
+                    avg_train_loss, 
+                    avg_val_loss,
                     self.lr_scheduler.get_last_lr()[0]
                 ))
-                self.run.log({"loss": avg_loss})
+                # self.run.log({"loss": avg_loss})
+                self.run.log({"Train loss": avg_train_loss})
+                self.run.log({"Val loss": avg_val_loss})
 
                 # Save the last and best checkpoint
                 self._save_checkpoint(epoch + 1, name = '_last')
                 
-                if best_mse > avg_loss:
+                if best_mse > avg_val_loss:
                     self._save_checkpoint(epoch + 1, name='_best')
-                    best_mse = avg_loss
+                    best_mse = avg_val_loss
 
                 # Generate samples at specified intervals
                 if (
@@ -236,8 +269,8 @@ class Trainer:
                     (epoch + 1) == max_epochs
                 ):
                     self._generate_samples(epoch+1)
-            
-def load_checkpoint(
+
+def load_checkpoint_unet(
         save_path, 
         model, 
         optimizer, 
@@ -248,92 +281,11 @@ def load_checkpoint(
 
     checkpoint = torch.load(save_path, weights_only=True)
     model.load_state_dict(checkpoint["model"])
-    # ema = ExponentialMovingAverage(model.parameters(), decay=0.999)
-    # ema.load_state_dict(checkpoint["ema"])
     optimizer.load_state_dict(checkpoint['optimizer'])
 
     print(f"Loaded model from {save_path}")
     return model, optimizer
-          
-def load_train_objs(args):
-    
-    # load training set
-    if args.data_name == "nskt":
-        train_set = NSKT(
-            patch_size = args.patch_size, 
-            stride = args.stride,
-            scratch_dir = args.scratch_dir,
-            train = True,
-            is_T_fixed = args.is_T_fixed
-        )
-    elif args.data_name == "shanghai":
-        train_set = Shanghai(
-            data_path = args.scratch_dir,
-            img_size = args.patch_size, 
-            type = "train",
-            trans = None,
-            total_interp_steps = args.total_interp_steps
-        )
 
-    ema = None # placeholder for non-FLEX model
-    if args.model == 'FLEX':
-        encoder, task_encoder, task_encoder_end, decoder = FLEX(
-            image_size = args.patch_size, 
-            in_channels = 1, 
-            out_channels = 1,
-            model_size= 'medium', # was "small"
-            mlp_ratio = 2
-        )
-        model = DiffusionModel(
-            encoder = encoder.cuda(),
-            decoder = decoder.cuda(),
-            task_encoder = task_encoder.cuda(),
-            task_encoder_end = task_encoder_end.cuda(),
-            diff_steps = args.time_steps,
-            prediction_type = args.prediction_type,
-            criterion = torch.nn.L1Loss() # maybe l2?
-        )
-        # choose optimizer
-        ema = ExponentialMovingAverage(
-            model.parameters(), 
-            decay = 0.999
-        )
-    elif args.model == 'UNet':
-        model = UNet(
-            image_size = args.patch_size, 
-            in_channels = 2, # start and end frames
-            out_channels = 1, # predict interpolated frame
-            base_width = args.base_width
-        )
-    else:
-        print("This model is not supported.")
-        sys.exit()
-
-    if args.optimizer == 'adam':
-        optimizer = torch.optim.Adam(
-            model.parameters(), 
-            lr = args.learning_rate
-        )
-    elif args.optimizer == 'lion':
-        optimizer = Lion(
-            model.parameters(), 
-            lr = args.learning_rate
-        )
-    else:
-        print("Only Adam and Lion are supported.")
-        sys.exit()
-    return train_set, model, optimizer, ema
-
-def prepare_dataloader(dataset: Dataset, batch_size: int):
-    return DataLoader(
-        dataset,
-        batch_size = batch_size,
-        pin_memory = True,
-        shuffle = False,
-        sampler = DistributedSampler(dataset),
-        num_workers = 8,
-        drop_last = True
-    )
 
 def main(
         rank: int, 
@@ -351,8 +303,10 @@ def main(
     device = torch.cuda.current_device()
     print("device: ", device)
     
-    dataset, model, optimizer, ema = load_train_objs(args = args)
-    train_data = prepare_dataloader(dataset, batch_size)
+    train_set, val_set, model, optimizer, ema = load_train_objs(args = args)
+    # train_loader, val_loader = prepare_dataloader(dataset, batch_size)
+    train_loader = prepare_dataloader(train_set, batch_size)
+    val_loader = prepare_dataloader(val_set, batch_size)
 
     if ema is not None:
         model.ema = ema
@@ -361,7 +315,7 @@ def main(
 
     # post-training checkpoint loading
     if args.checkpoint_path != '':
-        model, optimizer = load_checkpoint(
+        model, optimizer = load_checkpoint_unet(
             args.checkpoint_path, 
             model, 
             optimizer, 
@@ -380,7 +334,8 @@ def main(
     start = time.time()
     trainer = Trainer(
         model, 
-        train_data, 
+        train_loader, 
+        val_loader,
         optimizer, 
         gpu_id = rank, 
         local_gpu_id = local_rank, 
@@ -394,141 +349,14 @@ def main(
     destroy_process_group()
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(
-        description = "FLEX for Temporal Interpolation"
-    )
-    # general parameters
-    parser.add_argument(
-        "--run_name", 
-        type = str, 
-        default = 'run1', 
-        help = "Name of the current run."
-    )
-    parser.add_argument(
-        "--data_name", 
-        type = str, 
-        default = 'nskt', 
-        help = "Name of the dataset."
-    )
-    parser.add_argument(
-        "--sampling_freq", 
-        default = 10, 
-        type = int, 
-        help = "How often to save a snapshot"
-    )
-    # Training parameters
-    parser.add_argument(
-        "--optimizer", 
-        type = str, 
-        default = "adam", 
-        help = "Optimizer: adam or lion"
-    )
-    parser.add_argument(
-        "--epochs", 
-        default = 200, 
-        type = int, 
-        help = "Total epochs to train the model"
-    )
-    parser.add_argument(
-        "--batch_size", 
-        default = 16, 
-        type = int, 
-        help = "Input batch size on each device (default: 32)"
-    )
-    parser.add_argument(
-        "--learning_rate", 
-        default = 2e-4, 
-        type = float, 
-        help = 'learning rate'
-    )
-    parser.add_argument(
-        "--checkpoint_path", 
-        default = "", 
-        type = str, 
-        help = "for reloading checkpoint and keep training"
-    )
-    # dataset parameters
-    parser.add_argument(
-        "--total_interp_steps", 
-        default=1, 
-        type=int, 
-        help='total interpolation steps to condition on'
-    )
-    parser.add_argument(
-        "--is_T_fixed", 
-        default = True,
-        type = lambda x: (str(x).lower() == 'true'), 
-        help = "fix or change T in training."
-    )
-    parser.add_argument(
-        "--patch_size", 
-        default = 256, 
-        type = int, 
-        help = "Patch size for the datasets"
-    )
-    parser.add_argument(
-        "--stride", 
-        default = 128, 
-        type = int, 
-        help = "Stride for the datasets"
-    )
-    parser.add_argument(
-        "--scratch_dir",
-        default = "/global/cfs/cdirs/m4633/foundationmodel/nskt_tensor/", 
-        type = str, 
-        help = "Directory for the dataset"
-    )
-    # Diffusion parameters
-    parser.add_argument(
-        "--prediction_type", 
-        type = str, 
-        default = 'v', 
-        help = "Quantity to predict during training."
-    )
-    parser.add_argument(
-        "--sampler", 
-        type = str, 
-        default = 'ddim', 
-        help = "Sampler to use to generate images"
-    )    
-    parser.add_argument(
-        "--time_steps", 
-        type = int, 
-        default = 10, 
-        help = "Diffusion time steps for sampling"
-    )    
-    # model parameters
-    parser.add_argument(
-        "--model", 
-        type = str, 
-        default = 'FLEX', 
-        help = "model"
-    )    
-    # U-Net parameters
-    parser.add_argument(
-        "--base_width", 
-        type = int, 
-        default = 128, 
-        help = "Basewidth of U-Net"
-    )    
-    args = parser.parse_args()
+    args = get_args()
 
     # Launch processes.
     print('Launching processes...')
     
     # wandb.login()
     wandb.login(key = "5282eaefee2cb8f881265effb6251abf1703deee")
-    args.run_name = "Model_{}_Data_{}_Optim_{}_lr{}_epoch{}_stride{}_T{}_Tfixed{}".format(
-            args.model,
-            args.data_name,
-            args.optimizer,
-            args.learning_rate,
-            args.epochs,
-            args.stride,
-            args.total_interp_steps,
-            args.is_T_fixed
-    )
+    args.run_name = get_run_name(args)
     run = wandb.init(
         # Set the project where this run will be logged
         project = "InterpDM",
@@ -538,7 +366,7 @@ if __name__ == "__main__":
             "learning_rate": args.learning_rate,
             "epochs": args.epochs,
             "batch size": args.batch_size,
-            "total_interp_steps": args.total_interp_steps
+            "total_interp_steps": args.total_interp_steps_train
         },
     )
 
