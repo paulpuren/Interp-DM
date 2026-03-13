@@ -4,7 +4,7 @@
 
 module load python
 conda activate /pscratch/sd/p/puren93/conda_env/genai
-
+cd ..
 # # run nskt
 # python train.py \
 #     --model FLEX \
