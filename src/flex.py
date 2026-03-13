@@ -532,7 +532,7 @@ class Encoder(nn.Module):
             img_size = 256, 
             in_chans = 3,
             in_conds = 2,
-            model_channels = [128,256, 768],
+            model_channels = [128, 256, 768],
             num_res_blocks = [2, 2, 2, 2],
             depth = 12,
             num_heads = 12, 
@@ -958,7 +958,7 @@ class Decoder(nn.Module):
             skip = skips.pop() 
             if self.use_transf:
                 if self.skip:
-                    skip = skip + cond_skips.pop() # TODO: * 0.1 on skips
+                    skip = skip + 0.1 * cond_skips.pop() # TODO: * 0.1 on skips
                 else:
                     cond_skips.pop()
                     
