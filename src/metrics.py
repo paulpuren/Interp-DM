@@ -129,11 +129,11 @@ class Evaluator(object):
         self.losses = {
             "mse":  [],
             "mae":  [],
-            "rmse": [],
-            "psnr": [],
+            #"rmse": [],
+            #"psnr": [],
             "ssim": [],
-            "crps": [],
-            "lpips": [],
+            #"crps": [],
+            #"lpips": [],
         }
         self.seq_len = seq_len
         self.total = 0
