@@ -385,7 +385,8 @@ class DiffusionModel(nn.Module):
         self.diff_steps = diff_steps  
 
         # loss function
-        self.criterion = criterion or nn.L2Loss(reduction="none")
+        self.criterion = criterion
+        # self.criterion = criterion or nn.L2Loss(reduction="none")
 
          # shift passed to get_logsnr_alpha_sigma
         self.logsnr_shift = logsnr_shift 
