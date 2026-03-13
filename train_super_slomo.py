@@ -11,23 +11,22 @@ import torch.multiprocessing as mp
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group, barrier, get_rank, is_initialized, all_reduce, get_world_size
-from src.lion import Lion
 from diffusers.optimization import get_linear_schedule_with_warmup as scheduler
 from src.unet import UNet
 from src.flex import FLEX
 # import src.super_slomo as model
 import src.super_slomo as slomo_model
 
-from src.diffusion_model import DiffusionModel
-from datasets.get_data import NSKT as NSKT
+# from src.diffusion_model import DiffusionModel
+from datasets.data_nskt import NSKT
 from datasets.data_shanghai import Shanghai
+from datasets.data_sea_temp import InputHandle
+from src.lion import Lion
 from src.plotting import plot_samples
 
 import warnings
 warnings.filterwarnings("ignore")
 
-# import wandb.errors
-# print(dir(wandb.errors))
 
 def ddp_setup(local_rank, world_size):
     """
@@ -475,8 +474,9 @@ def load_train_objs(args, device):
         train_set = NSKT(
             patch_size = args.patch_size, 
             stride = args.stride,
+            num_interp_steps= args.total_interp_steps_train,
             scratch_dir = args.scratch_dir,
-            train = True,
+            flag = "train",
             is_T_fixed = args.is_T_fixed
         )
     elif args.data_name == "shanghai":
@@ -485,40 +485,23 @@ def load_train_objs(args, device):
             img_size = args.patch_size, 
             type = "train",
             trans = None,
-            total_interp_steps = args.total_interp_steps
+            total_interp_steps = args.total_interp_steps_train
         )
+    elif args.data_name == "sea_temp":
+        train_input_param = {
+            'path': args.scratch_dir,
+            'total_length': args.total_interp_steps_train, # total length of each sample (input + output)
+            'input_length': 2, # length of input sequence
+            'type': 'train', # train/test/valid
+            'input_data_type': 'float32'
+        }
+        train_set = InputHandle(train_input_param)
+    else:
+        print("This dataset is not supported. We currently only support (nskt), (shanghai), and (sea_temp) datasets.")
+        sys.exit()
 
     ema = None # placeholder for non-FLEX model
-    if args.model == 'FLEX':
-        encoder, task_encoder, task_encoder_end, decoder = FLEX(
-            image_size = args.patch_size, 
-            in_channels = 1, 
-            out_channels = 1,
-            model_size= 'medium', # was "small"
-            mlp_ratio = 2
-        )
-        model = DiffusionModel(
-            encoder = encoder.cuda(),
-            decoder = decoder.cuda(),
-            task_encoder = task_encoder.cuda(),
-            task_encoder_end = task_encoder_end.cuda(),
-            diff_steps = args.time_steps,
-            prediction_type = args.prediction_type,
-            criterion = torch.nn.L1Loss() # maybe l2?
-        )
-        # choose optimizer
-        ema = ExponentialMovingAverage(
-            model.parameters(), 
-            decay = 0.999
-        )
-    # elif args.model == 'UNet':
-    #     model = UNet(
-    #         image_size = args.patch_size, 
-    #         in_channels = 2, # start and end frames
-    #         out_channels = 1, # predict interpolated frame
-    #         base_width = args.base_width
-    #     )
-    elif args.model == 'SuperSloMo':
+    if args.model == 'SuperSloMo':
         # model = SuperSloMo(
         #     device = 'cuda',
         #     time_step = args.time_steps
@@ -722,7 +705,7 @@ if __name__ == "__main__":
     )
     # dataset parameters
     parser.add_argument(
-        "--total_interp_steps", 
+        "--total_interp_steps_train", 
         default=1, 
         type=int, 
         help='total interpolation steps to condition on'
@@ -764,12 +747,6 @@ if __name__ == "__main__":
         default = 'ddim', 
         help = "Sampler to use to generate images"
     )    
-    parser.add_argument(
-        "--time_steps", 
-        type = int, 
-        default = 10, 
-        help = "Diffusion time steps for sampling"
-    )    
     # model parameters
     parser.add_argument(
         "--model", 
@@ -798,7 +775,7 @@ if __name__ == "__main__":
             args.learning_rate,
             args.epochs,
             args.stride,
-            args.total_interp_steps,
+            args.total_interp_steps_train,
             args.is_T_fixed
     )
     run = wandb.init(
@@ -810,7 +787,7 @@ if __name__ == "__main__":
             "learning_rate": args.learning_rate,
             "epochs": args.epochs,
             "batch size": args.batch_size,
-            "total_interp_steps": args.total_interp_steps
+            "total_interp_steps": args.total_interp_steps_train
         },
     )
 
