@@ -576,21 +576,19 @@ class QKVAttention(nn.Module):
         assert width % (3 * self.n_heads) == 0
         ch = width // (3 * self.n_heads)
         q, k, v = qkv.chunk(3, dim=1)
-        scale = 1 / math.sqrt(math.sqrt(ch))
-        weight = th.einsum(
-            "bct,bcs->bts",
-            (q * scale).view(bs * self.n_heads, ch, length),
-            (k * scale).view(bs * self.n_heads, ch, length),
-        )  # More stable with f16 than dividing afterwards
-        weight = th.softmax(
-            weight.float(), 
-            dim=-1
-        ).type(weight.dtype)
-        a = th.einsum(
-            "bts,bcs->bct", 
-            weight, 
-            v.reshape(bs * self.n_heads, ch, length)
-        )
+        # Avoid strided-batched GEMM kernels that can fail on some CUDA stacks.
+        q = q.contiguous().reshape(bs * self.n_heads, ch, length).transpose(1, 2)
+        k = k.contiguous().reshape(bs * self.n_heads, ch, length)
+        v = v.contiguous().reshape(bs * self.n_heads, ch, length).transpose(1, 2)
+
+        scale = 1.0 / math.sqrt(ch)
+        out = []
+        for i in range(q.shape[0]):
+            weight = th.matmul(q[i], k[i]) * scale
+            weight = th.softmax(weight.float(), dim=-1).to(weight.dtype)
+            out.append(th.matmul(weight, v[i]))
+
+        a = th.stack(out, dim=0).transpose(1, 2).contiguous()
         return a.reshape(bs, -1, length)
 
     @staticmethod
