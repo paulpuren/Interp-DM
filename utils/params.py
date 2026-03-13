@@ -55,7 +55,7 @@ def get_args():
     )
     # dataset parameters
     parser.add_argument(
-        "--total_interp_steps", 
+        "--total_interp_steps_train", 
         default=1, 
         type=int, 
         help='total interpolation steps to condition on'
@@ -110,6 +110,18 @@ def get_args():
         default = 'FLEX', 
         help = "model"
     )    
+    parser.add_argument(
+        "--flex_model_size", 
+        type = str, 
+        default = 'small', 
+        help = "model: small, medium, big"
+    )  
+    parser.add_argument(
+        "--flex_mlp_ratio", 
+        type = int, 
+        default = 2, 
+        help = "mlp ratios: 2 or 4"
+    )   
     # U-Net parameters
     parser.add_argument(
         "--base_width", 
