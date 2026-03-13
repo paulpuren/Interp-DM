@@ -1,5 +1,12 @@
+"""
+Evaluation for Shanghai radar data
+----------------------------------
+* eval for different interpolation steps
+* eval for different patch sizes
+* eval for different models
+"""
 
-import os
+import os, time
 import torch
 import numpy as np
 # from src.unet import UNet
@@ -13,6 +20,8 @@ import h5py
 import torch.nn as nn
 from torchvision import transforms 
 import cv2
+from utils.params_eval import get_args
+from utilities import *
 
 PIXEL_SCALE = 90.0
 
@@ -150,125 +159,18 @@ class Shanghai_Eval(Dataset):
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description = 'Minimalistic Diffusion Model for Super-resolution'
-    )
-    parser.add_argument(
-        '--re_num_id', 
-        default = -1, 
-        type = int,
-        help = 'reynolds number id (0-7): check RE_list'
-    )
-    parser.add_argument(
-        "--data_name", 
-        type = str, 
-        default = 'nskt', 
-        help = "Name of the dataset."
-    )
-    parser.add_argument(
-        '--batch_size', 
-        default = 128, 
-        type = int,
-        help = 'Input batch size on each device (default: 32)'
-    )
-    parser.add_argument(
-        '--patch_size', 
-        default = 256, 
-        type = int, 
-        help = 'target resolution'
-    )
-    parser.add_argument(
-        "--prediction_type", 
-        type = str, 
-        default = 'v',
-        help = "Quantity to predict during training."
-    )
-    parser.add_argument(
-        "--sampler", 
-        type = str, 
-        default = 'ddim', 
-        help = "Sampler to use to generate images"
-    )
-    parser.add_argument(
-        "--time_steps", 
-        type = int, 
-        default = 10,
-        help = "Time steps for sampling"
-    )
-    parser.add_argument(
-        '--total_interp_steps', 
-        default = 1, 
-        type = int,
-        help = 'total prediction steps during evaluation'
-    )
-    parser.add_argument(
-        "--total_interp_steps_train", 
-        default=1, 
-        type=int, 
-        help='total prediction steps during training'
-    )
-    parser.add_argument(
-        "--base_width", 
-        type = int,
-        default = 64, 
-        help = "Basewidth of U-Net"
-    )
-    parser.add_argument(
-        "--model", 
-        type = str, 
-        default = 'UNetVIT', 
-        help = "model"
-    )
-    parser.add_argument(
-        '--scratch_dir', 
-        default = '/global/cfs/cdirs/m4633/foundationmodel/nskt_tensor/', 
-        type = str, 
-        help = 'Directory for the dataset'
-    )
-    parser.add_argument(
-        "--optimizer", 
-        type = str, 
-        default = "adam", 
-        help = "Optimizer: adam or lion"
-    )
-    parser.add_argument(
-        "--epochs", 
-        default = 200, 
-        type = int, 
-        help = "Total epochs to train the model"
-    )
-    parser.add_argument(
-        "--learning_rate", 
-        default = 2e-4, 
-        type = float, 
-        help = 'learning rate'
-    )
-    parser.add_argument(
-        "--is_T_fixed", 
-        default = True,
-        type = lambda x: (str(x).lower() == 'true'), 
-        help = "fix or change T in training."
-    )
-    parser.add_argument(
-        "--stride", 
-        default = 128, 
-        type = int, 
-        help = "Stride for the datasets"
-    )
-    args = parser.parse_args()
+    args = get_args()
     
     # load model
     print("Loading the trained model...")
 
     # FLEX model
     encoder, task_encoder, task_encoder_end, decoder = FLEX(
-        image_size = args.patch_size, 
+        image_size = args.target_resolution, 
         in_channels = 1, 
         out_channels = 1,
-        model_size = 'medium', # 'medium'
-        mlp_ratio = 2
+        model_size = args.flex_model_size,
+        mlp_ratio = args.flex_mlp_ratio
     )
     model = DiffusionModel(
         encoder = encoder.cuda(),
@@ -286,23 +188,24 @@ if __name__ == "__main__":
 
     # model save path
     checkpoint_dir = './checkpoints'
-    run_name = "Model2_interp_skip0.1_{}_Data_{}_Optim_{}_lr{}_epoch{}_stride{}_T{}_Tfixed{}".format(
-            args.model,
-            args.data_name,
-            args.optimizer,
-            args.learning_rate,
-            args.epochs,
-            args.stride,
-            args.total_interp_steps_train,
-            args.is_T_fixed
-    )
+    run_name = get_run_name(args)
+    print("using run name: ", run_name)
+    # run_name = "Model2_interp_skip0.1_{}_Data_{}_Optim_{}_lr{}_epoch{}_stride{}_T{}_Tfixed{}".format(
+    #         args.model,
+    #         args.data_name,
+    #         args.optimizer,
+    #         args.learning_rate,
+    #         args.epochs,
+    #         args.stride,
+    #         args.total_interp_steps_train,
+    #         args.is_T_fixed
+    # )
     save_path = "{}/checkpoint_{}.pt".format(
         checkpoint_dir,
         run_name
     )
     print(f'Loading from {save_path}')
-    # save_path = "./checkpoints/checkpoint_Model_FLEX_Data_shanghai_Optim_adam_lr0.0003_epoch200_stride128_TfixedFalse.pt"
-    checkpoint = torch.load(save_path, weights_only = True)
+    checkpoint = torch.load(save_path, weights_only=True)
     model.load_state_dict(checkpoint["model"])
     ema.load_state_dict(checkpoint["ema"])
 
@@ -317,17 +220,10 @@ if __name__ == "__main__":
 
     # load test data
     print("Loading the test dataset...")
-    # test_set = NSTK_FC(
-    #     total_interp_steps = args.total_interp_steps,
-    #     re_num_id = args.re_num_id,
-    #     patch_size = args.patch_size,
-    #     stride = 512,
-    #     scratch_dir = args.scratch_dir
-    # )
     test_set = Shanghai_Eval(
         total_interp_steps = args.total_interp_steps,
         data_path = args.scratch_dir,
-        img_size = args.patch_size, 
+        img_size = args.target_resolution, 
         type = "test",
         trans = None
     )
@@ -347,7 +243,7 @@ if __name__ == "__main__":
     with ema.average_parameters():
         with torch.no_grad():
             model.eval()
-
+            inference_time = []
             for i, (inputs, targets, cond_params) in enumerate(testloader):
                 print(i)
                 # Unpack the input tuple
@@ -363,6 +259,8 @@ if __name__ == "__main__":
 
                 preds = []
                 len_targets = len(targets)
+
+                start = time.time()
                 for ii in range(len(targets)):
                     target_interp_step = torch.tensor(
                         (ii + 1), 
@@ -373,7 +271,7 @@ if __name__ == "__main__":
                     )
                     predictions = model.sample(
                         condition_start.shape[0],
-                        (1, args.patch_size, args.patch_size),
+                        (1, args.target_resolution, args.target_resolution),
                         condition_start, 
                         condition_end, 
                         reynolds_number,
@@ -382,7 +280,8 @@ if __name__ == "__main__":
                         'cuda'
                     )                  
                     preds.append(predictions.cpu().detach().numpy())
-
+                end = time.time()
+                inference_time.append((end - start) / len(targets)) # each snapshot
 
                 for j in range(predictions.shape[0]):
                     RFNE_error_at_time_p = []
@@ -451,6 +350,25 @@ if __name__ == "__main__":
     avg_ssim = np.mean(np.vstack(SSIM_lst), axis = 0)
     print(f'Average SSIM value={repr(avg_ssim)}')
 
+    avg_infer_time = np.mean(inference_time, axis=0)
+    print(f'Average Inference Time={repr(avg_infer_time)}')
 
-
-# export CUDA_VISIBLE_DEVICES=7; python evaluation.py --task forecast --batch-size 32 --horizen 50 --Reynolds-number 12000
+    # save results
+    metrics = {
+        "avg_rfne_steps": avg_RFNE, 
+        "avg_r2_steps": avg_R2,
+        "avg_rfne_value": np.mean(avg_RFNE, axis=0), 
+        "avg_r2_value": np.mean(avg_R2, axis=0),
+        "avg_ssim_steps": avg_ssim, 
+        "avg_ssim_value": np.mean(avg_ssim, axis=0),
+        "avg_run_time": avg_infer_time
+    }
+    metrics_save_path = "./eval_{}.txt".format(
+        run_name
+    )
+    # header = "{}".format(run_name)
+    save_metrics(
+        metrics = metrics, 
+        save_path = metrics_save_path, 
+        header = run_name
+    )
