@@ -97,7 +97,7 @@ class Shanghai(Dataset):
         # define a random total pred steps
         # total_interp_steps = np.random.randint(5, 20)
         total_interp_steps = np.random.randint(
-            self.total_interp_steps // 2, 
+            self.total_interp_steps // 4, 
             self.total_interp_steps
         )
 
