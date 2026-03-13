@@ -299,7 +299,7 @@ class backWarp(nn.Module):
 
 # NSKT
 # num_snapshots = 10, dt = 5e-4
-T = 11
+T = 21
 t = np.linspace(0.0, (5e-4) * T, T)
 
 def getFlowCoeff (indices, device):
